@@ -735,9 +735,12 @@ $("syncBtn").addEventListener("click", async () => {
     $("syncBtn").textContent = "⇅ Synced";
     toast("⇅ Connected — Telegram & email drops will appear here");
     refreshRemote(false);
-  } catch {
+  } catch (e) {
     sync = null;
-    toast("⚠ Couldn't connect — check the URL and token");
+    const msg = /401/.test(e.message) ? "Worker reached, but it rejected the token (401) — the DASH_TOKEN doesn't match"
+      : /sync error (\d+)/.test(e.message) ? "Worker error — " + e.message
+      : "Couldn't reach the worker at that URL — " + e.message;
+    toast("⚠ " + msg);
   }
 });
 
