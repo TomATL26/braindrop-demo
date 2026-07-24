@@ -1,0 +1,679 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Braindrop — text it, forget it, find it</title>
+<meta name="description" content="Braindrop captures anything you throw at it — tasks, ideas, links, quotes, notes — and organizes it into a live dashboard with reminders.">
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+:root {
+  color-scheme: light;
+  --page:           #f9f9f7;
+  --surface:        #fcfcfb;
+  --ink:            #0b0b0b;
+  --ink-2:          #52514e;
+  --muted:          #898781;
+  --hairline:       #e1e0d9;
+  --border:         rgba(11,11,11,0.10);
+  /* categorical slots — fixed assignment, one per drop type */
+  --c-task:         #2a78d6;
+  --c-idea:         #eb6834;
+  --c-note:         #1baf7a;
+  --c-link:         #eda100;
+  --c-quote:        #e87ba4;
+  /* status — reserved, never reused for types */
+  --s-good:         #0ca30c;
+  --s-good-text:    #006300;
+  --s-warning:      #fab219;
+  --s-critical:     #d03b3b;
+  --wash-task:      rgba(42,120,214,0.10);
+  --wash-idea:      rgba(235,104,52,0.10);
+  --wash-note:      rgba(27,175,122,0.10);
+  --wash-link:      rgba(237,161,0,0.12);
+  --wash-quote:     rgba(232,123,164,0.12);
+  --wash-warning:   rgba(250,178,25,0.14);
+  --wash-critical:  rgba(208,59,59,0.10);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --page:           #0d0d0d;
+    --surface:        #1a1a19;
+    --ink:            #ffffff;
+    --ink-2:          #c3c2b7;
+    --muted:          #898781;
+    --hairline:       #2c2c2a;
+    --border:         rgba(255,255,255,0.10);
+    --c-task:         #3987e5;
+    --c-idea:         #d95926;
+    --c-note:         #199e70;
+    --c-link:         #c98500;
+    --c-quote:        #d55181;
+    --s-good-text:    #0ca30c;
+    --wash-task:      rgba(57,135,229,0.16);
+    --wash-idea:      rgba(217,89,38,0.16);
+    --wash-note:      rgba(25,158,112,0.16);
+    --wash-link:      rgba(201,133,0,0.18);
+    --wash-quote:     rgba(213,81,129,0.18);
+    --wash-warning:   rgba(250,178,25,0.16);
+    --wash-critical:  rgba(208,59,59,0.18);
+  }
+}
+
+body {
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  background: var(--page);
+  color: var(--ink);
+  line-height: 1.5;
+  min-height: 100vh;
+}
+.wrap { max-width: 760px; margin: 0 auto; padding: 0 16px 96px; }
+
+/* ---------- header ---------- */
+header {
+  display: flex; align-items: baseline; justify-content: space-between;
+  gap: 12px; padding: 20px 0 4px; flex-wrap: wrap;
+}
+.brand { font-size: 1.55rem; font-weight: 800; letter-spacing: -0.02em; }
+.brand .drop { color: var(--c-task); }
+.tagline { color: var(--ink-2); font-size: 0.9rem; }
+.toolbar { display: flex; gap: 8px; margin-left: auto; }
+.toolbar button {
+  background: none; border: 1px solid var(--border); border-radius: 8px;
+  color: var(--ink-2); font: inherit; font-size: 0.8rem; padding: 4px 10px; cursor: pointer;
+}
+.toolbar button:hover { border-color: var(--muted); color: var(--ink); }
+
+/* ---------- composer ---------- */
+.composer {
+  position: sticky; top: 0; z-index: 20;
+  background: var(--page); padding: 12px 0 10px;
+}
+.composer-row {
+  display: flex; gap: 8px; align-items: flex-end;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 16px; padding: 10px 10px 10px 16px;
+  box-shadow: 0 2px 12px rgba(0,0,0,0.06);
+}
+.composer textarea {
+  flex: 1; border: none; background: none; resize: none; outline: none;
+  font: inherit; color: var(--ink); max-height: 130px; min-height: 24px;
+}
+.composer textarea::placeholder { color: var(--muted); }
+.send {
+  background: var(--c-task); color: #fff; border: none; border-radius: 12px;
+  font: inherit; font-weight: 700; padding: 8px 16px; cursor: pointer; flex-shrink: 0;
+}
+.send:disabled { opacity: 0.4; cursor: default; }
+.hint-row {
+  display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+  padding: 8px 6px 0; min-height: 30px; font-size: 0.78rem; color: var(--muted);
+}
+.detect {
+  display: inline-flex; gap: 6px; align-items: center;
+  border: 1px solid var(--border); border-radius: 999px; padding: 2px 10px;
+  color: var(--ink-2); background: var(--surface);
+}
+.detect b { font-weight: 600; }
+
+/* ---------- stat tiles ---------- */
+.tiles { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin: 14px 0 18px; }
+.tile {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+  padding: 12px 14px;
+}
+.tile .val { font-size: 1.7rem; font-weight: 750; letter-spacing: -0.02em; line-height: 1.15; }
+.tile .lbl { font-size: 0.76rem; color: var(--ink-2); margin-top: 2px; }
+.tile .sub { font-size: 0.72rem; color: var(--s-critical); font-weight: 600; }
+@media (max-width: 560px) { .tiles { grid-template-columns: repeat(2, 1fr); } }
+
+/* ---------- filters ---------- */
+.filters { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-bottom: 14px; }
+.chip {
+  border: 1px solid var(--border); background: var(--surface); color: var(--ink-2);
+  border-radius: 999px; padding: 4px 12px; font: inherit; font-size: 0.82rem; cursor: pointer;
+  display: inline-flex; align-items: center; gap: 6px;
+}
+.chip .dot { width: 8px; height: 8px; border-radius: 50%; }
+.chip.active { border-color: var(--ink); color: var(--ink); font-weight: 650; }
+.search {
+  flex: 1; min-width: 140px; border: 1px solid var(--border); border-radius: 999px;
+  background: var(--surface); color: var(--ink); font: inherit; font-size: 0.85rem;
+  padding: 5px 14px; outline: none;
+}
+.search:focus { border-color: var(--muted); }
+
+/* ---------- sections & cards ---------- */
+.section-h {
+  font-size: 0.78rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em;
+  color: var(--ink-2); margin: 20px 0 8px; display: flex; align-items: center; gap: 8px;
+}
+.section-h.attention { color: var(--s-critical); }
+.cards { display: flex; flex-direction: column; gap: 8px; }
+.card {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+  padding: 12px 14px 10px 14px; border-left: 4px solid var(--type-c, var(--hairline));
+  display: flex; gap: 10px; align-items: flex-start;
+}
+.card.done { opacity: 0.55; }
+.card.done .content { text-decoration: line-through; }
+.checkbox {
+  width: 22px; height: 22px; border-radius: 7px; border: 2px solid var(--type-c);
+  background: none; cursor: pointer; flex-shrink: 0; margin-top: 2px;
+  display: inline-flex; align-items: center; justify-content: center;
+  color: #fff; font-size: 0.8rem; line-height: 1;
+}
+.card.done .checkbox { background: var(--s-good); border-color: var(--s-good); }
+.card-main { flex: 1; min-width: 0; }
+.content { word-wrap: break-word; white-space: pre-wrap; }
+.content a { color: var(--c-task); word-break: break-all; }
+.content .tag { color: var(--type-c, var(--ink-2)); font-weight: 600; }
+.card blockquote { font-style: italic; }
+.meta { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 6px; font-size: 0.74rem; color: var(--muted); }
+.badge {
+  display: inline-flex; align-items: center; gap: 4px;
+  border-radius: 999px; padding: 1px 9px; font-size: 0.72rem; font-weight: 650;
+  background: var(--type-wash); color: var(--type-c);
+}
+.due {
+  display: inline-flex; align-items: center; gap: 4px;
+  border-radius: 999px; padding: 1px 9px; font-size: 0.72rem; font-weight: 650;
+}
+.due.later  { background: var(--wash-task); color: var(--c-task); }
+.due.today  { background: var(--wash-warning); color: var(--ink); }
+.due.over   { background: var(--wash-critical); color: var(--s-critical); }
+.due.done-badge { background: var(--wash-note); color: var(--s-good-text); }
+.pri { color: var(--s-critical); font-weight: 700; font-size: 0.72rem; }
+.card-actions { display: flex; flex-direction: column; gap: 4px; }
+.card-actions button {
+  background: none; border: none; color: var(--muted); cursor: pointer;
+  font-size: 0.85rem; padding: 2px 4px; border-radius: 6px;
+}
+.card-actions button:hover { color: var(--ink); background: var(--wash-task); }
+.edit-area { width: 100%; font: inherit; color: var(--ink); background: var(--page);
+  border: 1px solid var(--border); border-radius: 8px; padding: 8px; resize: vertical; }
+
+/* ---------- empty state ---------- */
+.empty {
+  text-align: center; padding: 48px 16px; color: var(--ink-2);
+  border: 1px dashed var(--hairline); border-radius: 14px; margin-top: 16px;
+}
+.empty .big { font-size: 2rem; }
+.empty button {
+  margin-top: 12px; background: var(--c-task); color: #fff; border: none;
+  border-radius: 10px; font: inherit; font-weight: 650; padding: 8px 18px; cursor: pointer;
+}
+
+footer { margin-top: 40px; text-align: center; font-size: 0.75rem; color: var(--muted); }
+footer a { color: var(--ink-2); }
+
+.toast {
+  position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+  background: var(--ink); color: var(--page); border-radius: 999px;
+  padding: 8px 18px; font-size: 0.85rem; opacity: 0; pointer-events: none;
+  transition: opacity 0.25s; z-index: 50; max-width: 90vw; text-align: center;
+}
+.toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div>
+      <div class="brand">Braindrop<span class="drop">.</span></div>
+      <div class="tagline">Text it. Forget it. Find it.</div>
+    </div>
+    <div class="toolbar">
+      <button id="notifBtn" title="Get a browser notification when a task comes due">🔔 Remind me</button>
+      <button id="exportBtn">Export</button>
+      <button id="importBtn">Import</button>
+      <input type="file" id="importFile" accept=".json" hidden>
+    </div>
+  </header>
+
+  <div class="composer">
+    <div class="composer-row">
+      <textarea id="input" rows="1" placeholder="Chuck anything here — “buy milk tomorrow”, “idea: an app that…”, a link, a quote…"></textarea>
+      <button class="send" id="sendBtn" disabled>Drop it</button>
+    </div>
+    <div class="hint-row" id="hintRow">
+      <span>It sorts itself: tasks, ideas, notes, links &amp; quotes. Try #tags, “tomorrow 5pm”, “urgent”.</span>
+    </div>
+  </div>
+
+  <div class="tiles" role="group" aria-label="Summary">
+    <div class="tile"><div class="val" id="tOpen">0</div><div class="lbl">Open tasks</div></div>
+    <div class="tile"><div class="val" id="tDue">0</div><div class="lbl">Due today</div><div class="sub" id="tOver"></div></div>
+    <div class="tile"><div class="val" id="tIdeas">0</div><div class="lbl">Ideas captured</div></div>
+    <div class="tile"><div class="val" id="tAll">0</div><div class="lbl">Total drops</div></div>
+  </div>
+
+  <div class="filters" id="filters">
+    <input class="search" id="search" type="search" placeholder="Search drops &amp; #tags…">
+  </div>
+
+  <div id="list"></div>
+
+  <footer>
+    Everything stays in <em>your</em> browser (localStorage) — nothing is uploaded anywhere.<br>
+    Braindrop concept demo · built with plain HTML/CSS/JS
+  </footer>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+"use strict";
+/* ================= data ================= */
+const KEY = "braindrop.v1";
+const TYPES = {
+  task:  { icon: "✓",  label: "Task"  },
+  idea:  { icon: "💡", label: "Idea"  },
+  note:  { icon: "📝", label: "Note"  },
+  link:  { icon: "🔗", label: "Link"  },
+  quote: { icon: "❝",  label: "Quote" },
+};
+let drops = load();
+let filter = "all";
+let query = "";
+
+function load() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || []; }
+  catch { return []; }
+}
+function save() { localStorage.setItem(KEY, JSON.stringify(drops)); }
+
+/* ================= parser ================= */
+const RE_URL   = /(https?:\/\/[^\s<]+)/i;
+const RE_TAG   = /#([\p{L}\p{N}_-]+)/gu;
+const RE_TASK  = /\b(todo|to-do|remind me|need(s)? to|don'?t forget|must|buy|get|pick up|call|phone|email|text|message|pay|book|schedule|renew|cancel|return|order|fix|repair|clean|finish|submit|file|sign up|register|deadline|due|appointment|rsvp|water|feed|take out)\b/i;
+const RE_IDEA  = /^(idea|concept)[:\s]|\b(what if|imagine|app (for|that|idea)|startup|business idea|feature idea|could (we|i) (build|make)|side project)\b/i;
+const RE_QUOTE = /^\s*["“].+["”]\s*([—–-].+)?$/s;
+const RE_PRI   = /(!{2,}|\burgent(ly)?\b|\basap\b|\bimportant\b|\bcritical\b)/i;
+const RE_OVERRIDE = /^(task|idea|note|link|quote)\s*:\s*/i;
+
+const DAYS = ["sunday","monday","tuesday","wednesday","thursday","friday","saturday"];
+const MONTHS = ["january","february","march","april","may","june","july","august","september","october","november","december"];
+
+function parseWhen(text) {
+  const now = new Date();
+  const lower = text.toLowerCase();
+  let d = null, matched = null;
+
+  const set = (base, label) => { d = base; matched = label; };
+  const at = (date, h, m) => { const x = new Date(date); x.setHours(h, m || 0, 0, 0); return x; };
+
+  let m;
+  if ((m = lower.match(/\bin (\d+) (minute|min|hour|hr|day|week|month)s?\b/))) {
+    const n = +m[1]; const x = new Date(now);
+    if (/min/.test(m[2])) x.setMinutes(x.getMinutes() + n);
+    else if (/h/.test(m[2])) x.setHours(x.getHours() + n);
+    else if (m[2] === "day") x.setDate(x.getDate() + n);
+    else if (m[2] === "week") x.setDate(x.getDate() + 7 * n);
+    else x.setMonth(x.getMonth() + n);
+    set(x, m[0]);
+  } else if (lower.includes("day after tomorrow")) {
+    const x = new Date(now); x.setDate(x.getDate() + 2); set(at(x, 9), "day after tomorrow");
+  } else if (/\btomorrow\b/.test(lower)) {
+    const x = new Date(now); x.setDate(x.getDate() + 1); set(at(x, 9), "tomorrow");
+  } else if (/\btonight\b/.test(lower)) {
+    set(at(now, 20), "tonight");
+  } else if (/\btoday\b/.test(lower)) {
+    set(at(now, 18), "today");
+  } else if (/\bnext week\b/.test(lower)) {
+    const x = new Date(now); x.setDate(x.getDate() + 7); set(at(x, 9), "next week");
+  } else if ((m = lower.match(/\b(next )?(sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b/))) {
+    const target = DAYS.indexOf(m[2]);
+    let delta = (target - now.getDay() + 7) % 7;
+    if (delta === 0) delta = 7;
+    if (m[1]) delta = delta <= 7 ? delta + (delta < 7 ? 7 : 0) : delta;
+    const x = new Date(now); x.setDate(x.getDate() + delta); set(at(x, 9), m[0]);
+  } else if ((m = lower.match(/\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\.? (\d{1,2})(st|nd|rd|th)?\b/))) {
+    const mi = MONTHS.findIndex(mm => mm.startsWith(m[1].replace(".", "").slice(0, 3)));
+    const x = new Date(now.getFullYear(), mi, +m[2], 9, 0, 0, 0);
+    if (x < now) x.setFullYear(x.getFullYear() + 1);
+    set(x, m[0]);
+  }
+
+  if ((m = lower.match(/\b(?:at|by|@)\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b/)) && (m[3] || m[2])) {
+    let h = +m[1];
+    if (m[3] === "pm" && h < 12) h += 12;
+    if (m[3] === "am" && h === 12) h = 0;
+    const base = d || now;
+    const x = at(base, h, m[2] ? +m[2] : 0);
+    if (!d && x < now) x.setDate(x.getDate() + 1);
+    d = x; matched = (matched ? matched + " " : "") + m[0];
+  }
+  return d ? { due: d.getTime(), matched } : null;
+}
+
+function classify(raw) {
+  let text = raw.trim();
+  let type = null;
+
+  const ov = text.match(RE_OVERRIDE);
+  if (ov) { type = ov[1].toLowerCase(); text = text.slice(ov[0].length).trim() || text; }
+
+  const tags = [...text.matchAll(RE_TAG)].map(m => m[1].toLowerCase());
+  const when = parseWhen(text);
+  const priority = RE_PRI.test(text);
+
+  if (!type) {
+    if (RE_QUOTE.test(text)) type = "quote";
+    else if (RE_URL.test(text) && text.replace(RE_URL, "").trim().length < 60) type = "link";
+    else if (RE_TASK.test(text) || (when && !RE_IDEA.test(text))) type = "task";
+    else if (RE_IDEA.test(text)) type = "idea";
+    else if (RE_URL.test(text)) type = "link";
+    else type = "note";
+  }
+
+  return {
+    id: Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
+    text, type, tags,
+    due: when ? when.due : null,
+    dueLabel: when ? when.matched : null,
+    priority,
+    done: false,
+    created: Date.now(),
+    notified: false,
+  };
+}
+
+/* ================= rendering ================= */
+const $ = id => document.getElementById(id);
+const esc = s => s.replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
+
+function fmtContent(d) {
+  let h = esc(d.text);
+  h = h.replace(/(https?:\/\/[^\s<]+)/gi, u => `<a href="${u}" target="_blank" rel="noopener">${u.length > 60 ? u.slice(0, 57) + "…" : u}</a>`);
+  h = h.replace(/#([\p{L}\p{N}_-]+)/gu, '<span class="tag">#$1</span>');
+  if (d.type === "quote") h = `<blockquote>${h}</blockquote>`;
+  return h;
+}
+
+function relTime(ts) {
+  const s = (Date.now() - ts) / 1000;
+  if (s < 60) return "just now";
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+  if (s < 86400 * 7) return `${Math.floor(s / 86400)}d ago`;
+  return new Date(ts).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+function dueInfo(d) {
+  if (!d.due) return null;
+  const now = new Date();
+  const due = new Date(d.due);
+  const sameDay = due.toDateString() === now.toDateString();
+  const timeStr = due.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  const dateStr = due.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
+  if (d.done) return { cls: "done-badge", label: `✓ was due ${sameDay ? timeStr : dateStr}` };
+  if (due < now) return { cls: "over", label: `⚠ overdue · ${sameDay ? timeStr : dateStr}` };
+  if (sameDay) return { cls: "today", label: `⏰ today ${timeStr}` };
+  return { cls: "later", label: `📅 ${dateStr} ${timeStr}` };
+}
+
+function isDueToday(d) {
+  return d.due && !d.done && new Date(d.due).toDateString() === new Date().toDateString();
+}
+function isOverdue(d) { return d.due && !d.done && d.due < Date.now(); }
+
+function card(d) {
+  const t = TYPES[d.type];
+  const due = dueInfo(d);
+  const el = document.createElement("div");
+  el.className = "card" + (d.done ? " done" : "");
+  el.style.setProperty("--type-c", `var(--c-${d.type})`);
+  el.style.setProperty("--type-wash", `var(--wash-${d.type})`);
+  el.innerHTML = `
+    ${d.type === "task" ? `<button class="checkbox" aria-label="Mark done" data-act="toggle">${d.done ? "✓" : ""}</button>` : ""}
+    <div class="card-main">
+      <div class="content">${fmtContent(d)}</div>
+      <div class="meta">
+        <span class="badge">${t.icon} ${t.label}</span>
+        ${d.priority && !d.done ? `<span class="pri">‼ urgent</span>` : ""}
+        ${due ? `<span class="due ${due.cls}">${due.label}</span>` : ""}
+        <span>${relTime(d.created)}</span>
+      </div>
+    </div>
+    <div class="card-actions">
+      <button data-act="edit" aria-label="Edit" title="Edit">✎</button>
+      <button data-act="del" aria-label="Delete" title="Delete">🗑</button>
+    </div>`;
+  el.addEventListener("click", e => {
+    const act = e.target.closest("[data-act]")?.dataset.act;
+    if (!act) return;
+    if (act === "toggle") { d.done = !d.done; save(); render(); }
+    if (act === "del") { drops = drops.filter(x => x.id !== d.id); save(); render(); toast("Deleted"); }
+    if (act === "edit") startEdit(el, d);
+  });
+  return el;
+}
+
+function startEdit(el, d) {
+  const main = el.querySelector(".card-main");
+  main.innerHTML = "";
+  const ta = document.createElement("textarea");
+  ta.className = "edit-area"; ta.value = d.text; ta.rows = 2;
+  main.appendChild(ta); ta.focus();
+  const finish = () => {
+    const v = ta.value.trim();
+    if (v && v !== d.text) {
+      const re = classify(v);
+      d.text = re.text; d.tags = re.tags;
+      if (re.due) { d.due = re.due; d.dueLabel = re.dueLabel; d.notified = false; }
+      d.priority = re.priority;
+      save();
+    }
+    render();
+  };
+  ta.addEventListener("blur", finish);
+  ta.addEventListener("keydown", e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); ta.blur(); } });
+}
+
+function matches(d) {
+  if (filter === "done") { if (!d.done) return false; }
+  else if (d.done && filter !== "all") return false;
+  else if (filter !== "all" && filter !== "done" && d.type !== filter) return false;
+  if (query) {
+    const q = query.toLowerCase();
+    if (!d.text.toLowerCase().includes(q) && !d.tags.some(t => ("#" + t).includes(q) || t.includes(q.replace(/^#/, "")))) return false;
+  }
+  return true;
+}
+
+function render() {
+  /* stats */
+  const openTasks = drops.filter(d => d.type === "task" && !d.done);
+  const dueToday = drops.filter(isDueToday);
+  const overdue = drops.filter(isOverdue).filter(d => !isDueToday(d));
+  $("tOpen").textContent = openTasks.length;
+  $("tDue").textContent = dueToday.length;
+  $("tOver").textContent = overdue.length ? `+${overdue.length} overdue` : "";
+  $("tIdeas").textContent = drops.filter(d => d.type === "idea").length;
+  $("tAll").textContent = drops.length;
+
+  /* list */
+  const list = $("list");
+  list.innerHTML = "";
+  const visible = drops.filter(matches).sort((a, b) => b.created - a.created);
+
+  if (!drops.length) {
+    list.innerHTML = `<div class="empty">
+      <div class="big">🧠→📥</div>
+      <p><b>Your brain has an inbox now.</b><br>Type anything above — or load a few examples to see how it sorts.</p>
+      <button id="seedBtn">Show me with demo drops</button></div>`;
+    $("seedBtn").addEventListener("click", seed);
+    return;
+  }
+  if (!visible.length) {
+    list.innerHTML = `<div class="empty"><p>Nothing matches this filter.</p></div>`;
+    return;
+  }
+
+  const attention = visible.filter(d => (isOverdue(d) || isDueToday(d)));
+  const rest = visible.filter(d => !attention.includes(d));
+
+  if (attention.length) {
+    const h = document.createElement("div");
+    h.className = "section-h attention";
+    h.textContent = "⚠ Needs attention";
+    list.appendChild(h);
+    const c = document.createElement("div"); c.className = "cards";
+    attention.sort((a, b) => a.due - b.due).forEach(d => c.appendChild(card(d)));
+    list.appendChild(c);
+  }
+  if (rest.length) {
+    if (attention.length) {
+      const h = document.createElement("div");
+      h.className = "section-h"; h.textContent = "Everything else";
+      list.appendChild(h);
+    }
+    const c = document.createElement("div"); c.className = "cards";
+    rest.forEach(d => c.appendChild(card(d)));
+    list.appendChild(c);
+  }
+}
+
+/* ---------- filters ---------- */
+function buildFilters() {
+  const bar = $("filters");
+  const defs = [["all", "All", null], ...Object.entries(TYPES).map(([k, v]) => [k, v.label + "s", k]), ["done", "Done ✓", null]];
+  defs.reverse().forEach(([key, label, colorKey]) => {
+    const b = document.createElement("button");
+    b.className = "chip" + (filter === key ? " active" : "");
+    b.dataset.f = key;
+    b.innerHTML = (colorKey ? `<span class="dot" style="background:var(--c-${colorKey})"></span>` : "") + label;
+    b.addEventListener("click", () => {
+      filter = key;
+      bar.querySelectorAll(".chip").forEach(x => x.classList.toggle("active", x.dataset.f === key));
+      render();
+    });
+    bar.prepend(b);
+  });
+}
+
+/* ---------- composer ---------- */
+const input = $("input"), sendBtn = $("sendBtn"), hintRow = $("hintRow");
+const defaultHint = hintRow.innerHTML;
+
+input.addEventListener("input", () => {
+  input.style.height = "auto";
+  input.style.height = Math.min(input.scrollHeight, 130) + "px";
+  const v = input.value.trim();
+  sendBtn.disabled = !v;
+  if (!v) { hintRow.innerHTML = defaultHint; return; }
+  const p = classify(v);
+  const t = TYPES[p.type];
+  hintRow.innerHTML = `<span class="detect">Filed as <b style="color:var(--c-${p.type})">${t.icon} ${t.label}</b></span>` +
+    (p.due ? `<span class="detect">⏰ <b>${new Date(p.due).toLocaleString(undefined, { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}</b></span>` : "") +
+    (p.tags.length ? `<span class="detect">${p.tags.map(x => "#" + x).join(" ")}</span>` : "") +
+    (p.priority ? `<span class="detect" style="color:var(--s-critical)">‼ urgent</span>` : "") +
+    `<span style="opacity:.7">· prefix “idea:”, “note:”… to override</span>`;
+});
+input.addEventListener("keydown", e => {
+  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submit(); }
+});
+sendBtn.addEventListener("click", submit);
+
+function submit() {
+  const v = input.value.trim();
+  if (!v) return;
+  const d = classify(v);
+  drops.unshift(d);
+  save();
+  input.value = ""; input.style.height = "auto";
+  sendBtn.disabled = true; hintRow.innerHTML = defaultHint;
+  render();
+  toast(`${TYPES[d.type].icon} Dropped as ${TYPES[d.type].label.toLowerCase()}${d.due ? " · reminder set" : ""}`);
+}
+
+/* ---------- toast ---------- */
+let toastTimer;
+function toast(msg) {
+  const t = $("toast");
+  t.textContent = msg; t.classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove("show"), 2200);
+}
+
+/* ---------- notifications ---------- */
+$("notifBtn").addEventListener("click", async () => {
+  if (!("Notification" in window)) return toast("Notifications aren't supported in this browser");
+  const perm = await Notification.requestPermission();
+  toast(perm === "granted" ? "🔔 You'll be pinged when tasks come due (while a tab is open)" : "Notifications blocked");
+});
+setInterval(() => {
+  if (!("Notification" in window) || Notification.permission !== "granted") return;
+  const now = Date.now();
+  let changed = false;
+  drops.forEach(d => {
+    if (d.due && !d.done && !d.notified && d.due <= now) {
+      new Notification("Braindrop reminder", { body: d.text });
+      d.notified = true; changed = true;
+    }
+  });
+  if (changed) { save(); render(); }
+}, 30000);
+
+/* ---------- export / import ---------- */
+$("exportBtn").addEventListener("click", () => {
+  const blob = new Blob([JSON.stringify(drops, null, 2)], { type: "application/json" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "braindrop-export.json";
+  a.click();
+  URL.revokeObjectURL(a.href);
+});
+$("importBtn").addEventListener("click", () => $("importFile").click());
+$("importFile").addEventListener("change", e => {
+  const f = e.target.files[0];
+  if (!f) return;
+  const r = new FileReader();
+  r.onload = () => {
+    try {
+      const arr = JSON.parse(r.result);
+      if (!Array.isArray(arr)) throw 0;
+      const ids = new Set(drops.map(d => d.id));
+      const add = arr.filter(d => d && d.id && d.text && !ids.has(d.id));
+      drops = [...add, ...drops];
+      save(); render();
+      toast(`Imported ${add.length} drop${add.length === 1 ? "" : "s"}`);
+    } catch { toast("That file doesn't look like a Braindrop export"); }
+  };
+  r.readAsText(f);
+  e.target.value = "";
+});
+
+/* ---------- search ---------- */
+$("search").addEventListener("input", e => { query = e.target.value.trim(); render(); });
+
+/* ---------- demo seed ---------- */
+function seed() {
+  const now = Date.now(), H = 3600e3, D = 24 * H;
+  const mk = (text, ago, extra) => Object.assign(classify(text), { created: now - ago }, extra);
+  drops = [
+    mk("Call the dentist to reschedule tomorrow at 10am #health", 2 * H),
+    mk("Idea: a plant-care app that texts you when your plants are thirsty #apps", 5 * H),
+    mk("“The best way to predict the future is to invent it.” — Alan Kay", 8 * H),
+    mk("https://developer.mozilla.org/en-US/docs/Web/API/Notification great reference for web notifications #dev", 26 * H),
+    mk("Pay the water bill!! urgent", 30 * H, { due: now - 2 * H, dueLabel: "yesterday" }),
+    mk("Pick up the dry cleaning today at 6pm #errands", 4 * H),
+    mk("Gift ideas for Sam: vinyl records, that pour-over kettle, hiking socks #gifts", 2 * D),
+    mk("Book flights for the Denver trip next Friday #travel", 3 * D),
+    mk("Note to self: the parking garage code is 4482", 5 * D),
+  ];
+  save(); render();
+  toast("Demo drops loaded — this is your dashboard");
+}
+
+/* ---------- init ---------- */
+buildFilters();
+render();
+setInterval(render, 60000);
+</script>
+</body>
+</html>
