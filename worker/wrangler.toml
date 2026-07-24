@@ -1,0 +1,16 @@
+name = "braindrop-worker"
+main = "worker.js"
+compatibility_date = "2026-07-01"
+
+# Create the namespace first:  npx wrangler kv namespace create DROPS
+# then paste the id it prints below.
+[[kv_namespaces]]
+binding = "DROPS"
+id = "PASTE_KV_NAMESPACE_ID_HERE"
+
+# Secrets are set with `npx wrangler secret put <NAME>`, never committed:
+#   TELEGRAM_TOKEN     bot token from @BotFather
+#   TELEGRAM_SECRET    any random string; also passed to setWebhook
+#   DASH_TOKEN         any random string; pasted into the dashboard's Sync setup
+#   EMAIL_TOKEN        any random string; used on the /email webhook URL
+#   ANTHROPIC_API_KEY  optional — enables Claude classification

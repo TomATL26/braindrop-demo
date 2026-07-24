@@ -228,6 +228,7 @@ footer a { color: var(--ink-2); }
     </div>
     <div class="toolbar">
       <button id="notifBtn" title="Get a browser notification when a task comes due">🔔 Remind me</button>
+      <button id="syncBtn" title="Connect a Braindrop worker to sync with Telegram &amp; email capture">⇅ Sync</button>
       <button id="exportBtn">Export</button>
       <button id="importBtn">Import</button>
       <input type="file" id="importFile" accept=".json" hidden>
@@ -258,7 +259,7 @@ footer a { color: var(--ink-2); }
   <div id="list"></div>
 
   <footer>
-    Everything stays in <em>your</em> browser (localStorage) — nothing is uploaded anywhere.<br>
+    Local-first: drops live in <em>your</em> browser. Connect a sync worker (⇅) to capture from Telegram &amp; email too.<br>
     Braindrop concept demo · built with plain HTML/CSS/JS
   </footer>
 </div>
@@ -285,6 +286,39 @@ function load() {
   catch { return []; }
 }
 function save() { localStorage.setItem(KEY, JSON.stringify(drops)); }
+
+/* ================= sync (optional worker backend) ================= */
+const SYNC_KEY = "braindrop.sync";
+let sync = null;
+try { sync = JSON.parse(localStorage.getItem(SYNC_KEY)); } catch { /* not configured */ }
+
+async function apiCall(path, options = {}) {
+  const res = await fetch(sync.url.replace(/\/$/, "") + path, {
+    ...options,
+    headers: {
+      "Authorization": `Bearer ${sync.token}`,
+      ...(options.body ? { "Content-Type": "application/json" } : {}),
+    },
+  });
+  if (!res.ok) throw new Error(`sync error ${res.status}`);
+  return res.status === 204 ? null : res.json();
+}
+
+async function refreshRemote(silent = true) {
+  if (!sync) return;
+  try {
+    drops = await apiCall("/api/drops");
+    save();
+    render();
+  } catch (e) {
+    if (!silent) toast("⚠ Couldn't reach the sync worker");
+  }
+}
+
+// Fire-and-forget mutation; the optimistic local change already rendered.
+function remotePush(promise) {
+  promise.catch(() => toast("⚠ Sync failed — change is local only"));
+}
 
 /* ================= parser ================= */
 const RE_URL   = /(https?:\/\/[^\s<]+)/i;
@@ -437,6 +471,8 @@ function card(d) {
         ${d.priority && !d.done ? `<span class="pri">‼ urgent</span>` : ""}
         ${due ? `<span class="due ${due.cls}">${due.label}</span>` : ""}
         <span>${relTime(d.created)}</span>
+        ${d.source === "telegram" ? `<span title="Captured via Telegram">✈ Telegram</span>` : ""}
+        ${d.source === "email" ? `<span title="Captured via email${d.emailFrom ? " from " + esc(d.emailFrom) : ""}">✉ Email</span>` : ""}
       </div>
     </div>
     <div class="card-actions">
@@ -446,8 +482,14 @@ function card(d) {
   el.addEventListener("click", e => {
     const act = e.target.closest("[data-act]")?.dataset.act;
     if (!act) return;
-    if (act === "toggle") { d.done = !d.done; save(); render(); }
-    if (act === "del") { drops = drops.filter(x => x.id !== d.id); save(); render(); toast("Deleted"); }
+    if (act === "toggle") {
+      d.done = !d.done; save(); render();
+      if (sync) remotePush(apiCall(`/api/drops/${d.id}`, { method: "PATCH", body: JSON.stringify({ done: d.done }) }));
+    }
+    if (act === "del") {
+      drops = drops.filter(x => x.id !== d.id); save(); render(); toast("Deleted");
+      if (sync) remotePush(apiCall(`/api/drops/${d.id}`, { method: "DELETE" }));
+    }
     if (act === "edit") startEdit(el, d);
   });
   return el;
@@ -467,6 +509,7 @@ function startEdit(el, d) {
       if (re.due) { d.due = re.due; d.dueLabel = re.dueLabel; d.notified = false; }
       d.priority = re.priority;
       save();
+      if (sync) remotePush(apiCall(`/api/drops/${d.id}`, { method: "PATCH", body: JSON.stringify({ text: v }) }).then(() => refreshRemote()));
     }
     render();
   };
@@ -589,6 +632,14 @@ function submit() {
   sendBtn.disabled = true; hintRow.innerHTML = defaultHint;
   render();
   toast(`${TYPES[d.type].icon} Dropped as ${TYPES[d.type].label.toLowerCase()}${d.due ? " · reminder set" : ""}`);
+  if (sync) {
+    // Server classifies too (with Claude when configured) and becomes the source of truth.
+    remotePush(apiCall("/api/drops", { method: "POST", body: JSON.stringify({ text: v }) }).then(remote => {
+      drops = drops.filter(x => x.id !== d.id);
+      drops.unshift(remote);
+      save(); render();
+    }));
+  }
 }
 
 /* ---------- toast ---------- */
@@ -670,10 +721,35 @@ function seed() {
   toast("Demo drops loaded — this is your dashboard");
 }
 
+/* ---------- sync setup ---------- */
+$("syncBtn").addEventListener("click", async () => {
+  if (sync && !confirm("Sync is connected. Reconfigure it? (Cancel keeps the current connection)")) return;
+  const url = prompt("Worker URL (from `wrangler deploy` — see worker/README.md):", sync?.url || "https://braindrop-worker.YOU.workers.dev");
+  if (!url) { if (sync) { sync = null; localStorage.removeItem(SYNC_KEY); toast("Sync disconnected"); } return; }
+  const token = prompt("Dashboard token (the DASH_TOKEN secret):", sync?.token || "");
+  if (!token) return;
+  sync = { url: url.trim(), token: token.trim() };
+  try {
+    await apiCall("/api/drops");
+    localStorage.setItem(SYNC_KEY, JSON.stringify(sync));
+    $("syncBtn").textContent = "⇅ Synced";
+    toast("⇅ Connected — Telegram & email drops will appear here");
+    refreshRemote(false);
+  } catch {
+    sync = null;
+    toast("⚠ Couldn't connect — check the URL and token");
+  }
+});
+
 /* ---------- init ---------- */
 buildFilters();
 render();
 setInterval(render, 60000);
+if (sync) {
+  refreshRemote();
+  setInterval(refreshRemote, 30000);
+  $("syncBtn").textContent = "⇅ Synced";
+}
 </script>
 </body>
 </html>
