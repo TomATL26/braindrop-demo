@@ -294,6 +294,10 @@ const CLASSIFY_SCHEMA = {
   additionalProperties: false,
 };
 
+// Named collections the user files drops into. Claude puts a matching
+// collection first in `tags`, so the dashboard can filter on it.
+const COLLECTIONS = ["recipes"];
+
 async function claudeClassify(text, env) {
   // Raw fetch (no SDK): this Worker deploys as a single file with no build step.
   const tz = env.TIMEZONE || "America/Chicago";
@@ -318,6 +322,9 @@ async function claudeClassify(text, env) {
         "Types: task (something to do), idea (a concept or 'what if'), link (mainly a URL), " +
         "quote (quoted words, usually with attribution), note (everything else). " +
         "tags: lowercase topical keywords — explicit #hashtags always, plus at most 2 inferred topics. " +
+        `The user files some drops into named collections: ${COLLECTIONS.join(", ")}. ` +
+        "When a drop belongs to a collection (e.g. a recipe, a link to one, or a dish to try), " +
+        "put that collection name FIRST in tags, spelled exactly as listed. " +
         `The user's timezone is ${tz}; right now it is ${localNow} there (${now.toISOString()} UTC). ` +
         "due: if the text implies a deadline or reminder time, resolve it in the user's timezone " +
         "(honor an explicit timezone if the text names one; default to 09:00 local when no time is given) " +

@@ -169,7 +169,8 @@ header {
 .card-main { flex: 1; min-width: 0; }
 .content { word-wrap: break-word; white-space: pre-wrap; }
 .content a { color: var(--c-task); word-break: break-all; }
-.content .tag { color: var(--type-c, var(--ink-2)); font-weight: 600; }
+.card .tag { color: var(--type-c, var(--ink-2)); font-weight: 600; cursor: pointer; }
+.card .tag:hover { text-decoration: underline; }
 .card blockquote { font-style: italic; }
 .meta { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 6px; font-size: 0.74rem; color: var(--muted); }
 .badge {
@@ -473,6 +474,7 @@ function card(d) {
         <span>${relTime(d.created)}</span>
         ${d.source === "telegram" ? `<span title="Captured via Telegram">✈ Telegram</span>` : ""}
         ${d.source === "email" ? `<span title="Captured via email${d.emailFrom ? " from " + esc(d.emailFrom) : ""}">✉ Email</span>` : ""}
+        ${(d.tags || []).filter(t => !d.text.toLowerCase().includes("#" + t)).map(t => `<span class="tag">#${esc(t)}</span>`).join(" ")}
       </div>
     </div>
     <div class="card-actions">
@@ -480,6 +482,12 @@ function card(d) {
       <button data-act="del" aria-label="Delete" title="Delete">🗑</button>
     </div>`;
   el.addEventListener("click", e => {
+    if (e.target.classList.contains("tag")) {
+      query = e.target.textContent;
+      $("search").value = query;
+      render();
+      return;
+    }
     const act = e.target.closest("[data-act]")?.dataset.act;
     if (!act) return;
     if (act === "toggle") {
