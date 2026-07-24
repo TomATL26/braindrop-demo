@@ -155,7 +155,11 @@ async function telegram(request, env) {
   const icons = { task: "✓", idea: "💡", note: "📝", link: "🔗", quote: "❝" };
   let confirmation = `${icons[drop.type]} Filed as ${drop.type}`;
   if (drop.due) {
-    confirmation += ` · ⏰ ${new Date(drop.due).toUTCString().replace(":00 GMT", " UTC")}`;
+    const local = new Intl.DateTimeFormat("en-US", {
+      timeZone: env.TIMEZONE || "America/Chicago",
+      weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit",
+    }).format(new Date(drop.due));
+    confirmation += ` · ⏰ ${local}`;
   }
   if (drop.tags.length) confirmation += ` · ${drop.tags.map((t) => "#" + t).join(" ")}`;
   if (drop.priority) confirmation += " · ‼ urgent";
@@ -292,7 +296,12 @@ const CLASSIFY_SCHEMA = {
 
 async function claudeClassify(text, env) {
   // Raw fetch (no SDK): this Worker deploys as a single file with no build step.
+  const tz = env.TIMEZONE || "America/Chicago";
   const now = new Date();
+  const localNow = new Intl.DateTimeFormat("en-US", {
+    timeZone: tz, weekday: "long", year: "numeric", month: "long", day: "numeric",
+    hour: "numeric", minute: "2-digit", timeZoneName: "short",
+  }).format(now);
   const res = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: {
@@ -309,9 +318,10 @@ async function claudeClassify(text, env) {
         "Types: task (something to do), idea (a concept or 'what if'), link (mainly a URL), " +
         "quote (quoted words, usually with attribution), note (everything else). " +
         "tags: lowercase topical keywords — explicit #hashtags always, plus at most 2 inferred topics. " +
-        "due: ISO 8601 UTC datetime if the text implies a deadline or reminder time " +
-        `(resolve relative phrases like 'tomorrow 10am' against current time ${now.toISOString()}; ` +
-        "default to 09:00 when no time is given), else null. " +
+        `The user's timezone is ${tz}; right now it is ${localNow} there (${now.toISOString()} UTC). ` +
+        "due: if the text implies a deadline or reminder time, resolve it in the user's timezone " +
+        "(honor an explicit timezone if the text names one; default to 09:00 local when no time is given) " +
+        "and output it as an ISO 8601 UTC datetime; else null. " +
         "priority: true only for urgency markers (urgent, asap, '!!', a hard deadline today).",
       messages: [{ role: "user", content: text }],
     }),
