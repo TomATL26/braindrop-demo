@@ -197,7 +197,8 @@ async function emailWebhook(request, env, url) {
     body = form.get("body-plain") || form.get("text") || "";
   }
   const drop = await captureEmail(env, from, subject, body);
-  return json(drop ? { ok: true, id: drop.id } : { ok: false, error: "empty email" }, drop ? 201 : 400);
+  // Plain 200 — Postmark and friends retry (and re-deliver) on anything else.
+  return json(drop ? { ok: true, id: drop.id } : { ok: false, error: "empty email" }, drop ? 200 : 400);
 }
 
 async function captureEmail(env, from, subject, body) {
