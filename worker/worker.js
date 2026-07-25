@@ -97,8 +97,9 @@ async function api(request, env, url) {
     const patch = await request.json();
     if (typeof patch.done === "boolean") drops[idx].done = patch.done;
     if (typeof patch.text === "string" && patch.text.trim()) {
-      const re = await classify(patch.text.trim(), env, drops[idx].source);
-      drops[idx] = { ...re, id: drops[idx].id, created: drops[idx].created, done: drops[idx].done };
+      const prev = drops[idx];
+      const re = await classify(patch.text.trim(), env, prev.source);
+      drops[idx] = { ...re, id: prev.id, created: prev.created, done: prev.done, body: prev.body, emailFrom: prev.emailFrom };
     }
     await saveDrops(env, drops);
     return json(drops[idx]);
@@ -206,22 +207,45 @@ async function emailWebhook(request, env, url) {
 }
 
 async function captureEmail(env, from, subject, body) {
-  // Forwarded emails bury the content under "Fwd:" headers — strip the noise.
   const cleanSubject = (subject || "").replace(/^((re|fwd?|fw)\s*:\s*)+/i, "").trim();
-  const cleanBody = (body || "")
-    .split(/^-{3,}\s*Forwarded message\s*-{3,}$/im)[0]
-    .replace(/^>.*$/gm, "")
-    .trim()
-    .slice(0, 2000);
-  const text = [cleanSubject, cleanBody].filter(Boolean).join("\n").trim();
-  if (!text) return null;
+  const cleanBody = extractEmailContent(body || "");
+  if (!cleanSubject && !cleanBody) return null;
 
-  const drop = await classify(text, env, "email");
+  // Classify on subject + a slice of body, but keep them separate for display:
+  // the subject is the card title, the body is the expandable context section.
+  const drop = await classify(
+    [cleanSubject, cleanBody.slice(0, 1500)].filter(Boolean).join("\n"), env, "email");
+  drop.text = cleanSubject || cleanBody.split("\n")[0].slice(0, 120);
+  drop.body = cleanBody || undefined;
   drop.emailFrom = from || undefined;
   const drops = await loadDrops(env);
   drops.unshift(drop);
   await saveDrops(env, drops);
   return drop;
+}
+
+/**
+ * Pull the readable content out of an email body. For forwards, the content
+ * lives *inside* the "---------- Forwarded message ----------" block, after
+ * its From/Date/Subject/To header lines; any note the sender typed above the
+ * marker is kept too.
+ */
+function extractEmailContent(body) {
+  const normalized = body.replace(/\r\n/g, "\n");
+  const parts = normalized.split(/^-{2,}\s*Forwarded message\s*-{2,}\s*$/im);
+  const note = (parts[0] || "").trim();
+  let forwarded = parts.slice(1).join("\n").trim();
+  if (forwarded) {
+    const lines = forwarded.split("\n");
+    let i = 0;
+    while (i < lines.length && (lines[i].trim() === "" || /^\s*(from|date|sent|subject|to|cc)\s*:/i.test(lines[i]))) i++;
+    forwarded = lines.slice(i).join("\n").trim();
+  }
+  return [note, forwarded].filter(Boolean).join("\n\n")
+    .replace(/^>.*$/gm, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim()
+    .slice(0, 4000);
 }
 
 /**

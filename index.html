@@ -39,12 +39,12 @@
 @media (prefers-color-scheme: dark) {
   :root {
     color-scheme: dark;
-    --page:           #0d0d0d;
-    --surface:        #1a1a19;
-    --ink:            #ffffff;
-    --ink-2:          #c3c2b7;
+    --page:           #0c0c0c;
+    --surface:        #161616;
+    --ink:            #f2f1ec;
+    --ink-2:          #b9b8ae;
     --muted:          #898781;
-    --hairline:       #2c2c2a;
+    --hairline:       #262624;
     --border:         rgba(255,255,255,0.10);
     --c-task:         #3987e5;
     --c-idea:         #d95926;
@@ -52,50 +52,47 @@
     --c-link:         #c98500;
     --c-quote:        #d55181;
     --s-good-text:    #0ca30c;
-    --wash-task:      rgba(57,135,229,0.16);
-    --wash-idea:      rgba(217,89,38,0.16);
-    --wash-note:      rgba(25,158,112,0.16);
-    --wash-link:      rgba(201,133,0,0.18);
-    --wash-quote:     rgba(213,81,129,0.18);
-    --wash-warning:   rgba(250,178,25,0.16);
-    --wash-critical:  rgba(208,59,59,0.18);
+    --wash-task:      rgba(57,135,229,0.14);
+    --wash-idea:      rgba(217,89,38,0.14);
+    --wash-note:      rgba(25,158,112,0.14);
+    --wash-link:      rgba(201,133,0,0.16);
+    --wash-quote:     rgba(213,81,129,0.16);
+    --wash-warning:   rgba(250,178,25,0.14);
+    --wash-critical:  rgba(208,59,59,0.16);
   }
 }
 
 body {
-  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-family: ui-monospace, "Cascadia Code", "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
   background: var(--page);
   color: var(--ink);
-  line-height: 1.5;
+  line-height: 1.55;
   min-height: 100vh;
+  font-size: 15px;
 }
-.wrap { max-width: 760px; margin: 0 auto; padding: 0 16px 96px; }
+.wrap { max-width: 1080px; margin: 0 auto; padding: 0 20px 96px; }
 
 /* ---------- header ---------- */
 header {
-  display: flex; align-items: baseline; justify-content: space-between;
-  gap: 12px; padding: 20px 0 4px; flex-wrap: wrap;
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; padding: 18px 0 6px; flex-wrap: wrap;
 }
-.brand { font-size: 1.55rem; font-weight: 800; letter-spacing: -0.02em; }
+.brand { font-size: 1.35rem; font-weight: 800; letter-spacing: -0.02em; }
 .brand .drop { color: var(--c-task); }
-.tagline { color: var(--ink-2); font-size: 0.9rem; }
+.tagline { color: var(--muted); font-size: 0.75rem; letter-spacing: 0.04em; }
 .toolbar { display: flex; gap: 8px; margin-left: auto; }
 .toolbar button {
-  background: none; border: 1px solid var(--border); border-radius: 8px;
-  color: var(--ink-2); font: inherit; font-size: 0.8rem; padding: 4px 10px; cursor: pointer;
+  background: none; border: 1px solid var(--border); border-radius: 999px;
+  color: var(--ink-2); font: inherit; font-size: 0.72rem; padding: 4px 12px; cursor: pointer;
 }
 .toolbar button:hover { border-color: var(--muted); color: var(--ink); }
 
 /* ---------- composer ---------- */
-.composer {
-  position: sticky; top: 0; z-index: 20;
-  background: var(--page); padding: 12px 0 10px;
-}
+.composer { position: sticky; top: 0; z-index: 20; background: var(--page); padding: 12px 0 8px; }
 .composer-row {
   display: flex; gap: 8px; align-items: flex-end;
   background: var(--surface); border: 1px solid var(--border);
-  border-radius: 16px; padding: 10px 10px 10px 16px;
-  box-shadow: 0 2px 12px rgba(0,0,0,0.06);
+  border-radius: 12px; padding: 10px 10px 10px 14px;
 }
 .composer textarea {
   flex: 1; border: none; background: none; resize: none; outline: none;
@@ -103,117 +100,140 @@ header {
 }
 .composer textarea::placeholder { color: var(--muted); }
 .send {
-  background: var(--c-task); color: #fff; border: none; border-radius: 12px;
-  font: inherit; font-weight: 700; padding: 8px 16px; cursor: pointer; flex-shrink: 0;
+  background: var(--c-task); color: #fff; border: none; border-radius: 8px;
+  font: inherit; font-weight: 700; padding: 7px 14px; cursor: pointer; flex-shrink: 0;
 }
-.send:disabled { opacity: 0.4; cursor: default; }
+.send:disabled { opacity: 0.35; cursor: default; }
 .hint-row {
   display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
-  padding: 8px 6px 0; min-height: 30px; font-size: 0.78rem; color: var(--muted);
+  padding: 7px 4px 0; min-height: 28px; font-size: 0.72rem; color: var(--muted);
 }
 .detect {
   display: inline-flex; gap: 6px; align-items: center;
-  border: 1px solid var(--border); border-radius: 999px; padding: 2px 10px;
+  border: 1px solid var(--border); border-radius: 999px; padding: 1px 10px;
   color: var(--ink-2); background: var(--surface);
 }
 .detect b { font-weight: 600; }
 
 /* ---------- stat tiles ---------- */
-.tiles { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin: 14px 0 18px; }
+.tiles { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin: 10px 0 14px; }
 .tile {
-  background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
-  padding: 12px 14px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+  padding: 10px 14px; display: flex; align-items: baseline; gap: 10px;
 }
-.tile .val { font-size: 1.7rem; font-weight: 750; letter-spacing: -0.02em; line-height: 1.15; }
-.tile .lbl { font-size: 0.76rem; color: var(--ink-2); margin-top: 2px; }
-.tile .sub { font-size: 0.72rem; color: var(--s-critical); font-weight: 600; }
-@media (max-width: 560px) { .tiles { grid-template-columns: repeat(2, 1fr); } }
+.tile .val { font-size: 1.35rem; font-weight: 750; }
+.tile .lbl { font-size: 0.68rem; color: var(--muted); letter-spacing: 0.08em; text-transform: uppercase; }
+.tile .sub { font-size: 0.68rem; color: var(--s-critical); font-weight: 600; margin-left: auto; }
+@media (max-width: 640px) { .tiles { grid-template-columns: repeat(2, 1fr); } }
 
 /* ---------- filters ---------- */
-.filters { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-bottom: 14px; }
+.filters { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-bottom: 6px; }
 .chip {
   border: 1px solid var(--border); background: var(--surface); color: var(--ink-2);
-  border-radius: 999px; padding: 4px 12px; font: inherit; font-size: 0.82rem; cursor: pointer;
+  border-radius: 999px; padding: 3px 12px; font: inherit; font-size: 0.74rem; cursor: pointer;
   display: inline-flex; align-items: center; gap: 6px;
 }
-.chip .dot { width: 8px; height: 8px; border-radius: 50%; }
+.chip .dot { width: 7px; height: 7px; border-radius: 50%; }
 .chip.active { border-color: var(--ink); color: var(--ink); font-weight: 650; }
 .search {
-  flex: 1; min-width: 140px; border: 1px solid var(--border); border-radius: 999px;
-  background: var(--surface); color: var(--ink); font: inherit; font-size: 0.85rem;
+  flex: 1; min-width: 160px; border: 1px solid var(--border); border-radius: 999px;
+  background: var(--surface); color: var(--ink); font: inherit; font-size: 0.78rem;
   padding: 5px 14px; outline: none;
 }
 .search:focus { border-color: var(--muted); }
 
-/* ---------- sections & cards ---------- */
-.section-h {
-  font-size: 0.78rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em;
-  color: var(--ink-2); margin: 20px 0 8px; display: flex; align-items: center; gap: 8px;
+/* ---------- date groups ---------- */
+.group-h {
+  display: flex; align-items: center; gap: 16px;
+  margin: 26px 0 12px; color: var(--muted);
+  font-size: 0.68rem; letter-spacing: 0.18em; text-transform: uppercase; white-space: nowrap;
 }
-.section-h.attention { color: var(--s-critical); }
-.cards { display: flex; flex-direction: column; gap: 8px; }
+.group-h::before, .group-h::after { content: ""; flex: 1; border-top: 1px solid var(--hairline); }
+.group-h.attention { color: var(--s-critical); }
+
+/* ---------- cards ---------- */
+.cards {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 10px; align-items: start;
+}
 .card {
-  background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
-  padding: 12px 14px 10px 14px; border-left: 4px solid var(--type-c, var(--hairline));
+  background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+  padding: 10px 12px; border-left: 3px solid var(--type-c, var(--hairline));
   display: flex; gap: 10px; align-items: flex-start;
 }
-.card.done { opacity: 0.55; }
+.card.done { opacity: 0.5; }
 .card.done .content { text-decoration: line-through; }
 .checkbox {
-  width: 22px; height: 22px; border-radius: 7px; border: 2px solid var(--type-c);
-  background: none; cursor: pointer; flex-shrink: 0; margin-top: 2px;
+  width: 20px; height: 20px; border-radius: 6px; border: 2px solid var(--type-c);
+  background: none; cursor: pointer; flex-shrink: 0; margin-top: 20px;
   display: inline-flex; align-items: center; justify-content: center;
-  color: #fff; font-size: 0.8rem; line-height: 1;
+  color: #fff; font-size: 0.75rem; line-height: 1;
 }
 .card.done .checkbox { background: var(--s-good); border-color: var(--s-good); }
 .card-main { flex: 1; min-width: 0; }
-.content { word-wrap: break-word; white-space: pre-wrap; }
+.stamp { font-size: 0.68rem; color: var(--muted); margin-bottom: 4px; letter-spacing: 0.04em; }
+.content { word-wrap: break-word; white-space: pre-wrap; font-weight: 650; font-size: 0.85rem; }
 .content a { color: var(--c-task); word-break: break-all; }
 .card .tag { color: var(--type-c, var(--ink-2)); font-weight: 600; cursor: pointer; }
 .card .tag:hover { text-decoration: underline; }
 .card blockquote { font-style: italic; }
-.meta { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 6px; font-size: 0.74rem; color: var(--muted); }
+
+/* email/context section — the highlighted body of a captured email */
+.context {
+  margin-top: 8px; padding: 8px 10px;
+  background: var(--type-wash, var(--wash-task)); border-left: 2px solid var(--type-c, var(--hairline));
+  border-radius: 6px; font-size: 0.76rem; font-weight: 400; color: var(--ink-2);
+  white-space: pre-wrap; word-wrap: break-word; overflow: hidden;
+}
+.context.collapsed { display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; }
+.ctx-toggle {
+  background: none; border: none; color: var(--muted); font: inherit; font-size: 0.7rem;
+  cursor: pointer; padding: 3px 0 0; display: block;
+}
+.ctx-toggle:hover { color: var(--ink); }
+.context a { color: var(--c-task); word-break: break-all; }
+
+.meta { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 7px; font-size: 0.68rem; color: var(--muted); }
 .badge {
   display: inline-flex; align-items: center; gap: 4px;
-  border-radius: 999px; padding: 1px 9px; font-size: 0.72rem; font-weight: 650;
+  border-radius: 999px; padding: 0 8px; font-size: 0.66rem; font-weight: 650;
   background: var(--type-wash); color: var(--type-c);
 }
 .due {
   display: inline-flex; align-items: center; gap: 4px;
-  border-radius: 999px; padding: 1px 9px; font-size: 0.72rem; font-weight: 650;
+  border-radius: 999px; padding: 0 8px; font-size: 0.66rem; font-weight: 650;
 }
 .due.later  { background: var(--wash-task); color: var(--c-task); }
 .due.today  { background: var(--wash-warning); color: var(--ink); }
 .due.over   { background: var(--wash-critical); color: var(--s-critical); }
 .due.done-badge { background: var(--wash-note); color: var(--s-good-text); }
-.pri { color: var(--s-critical); font-weight: 700; font-size: 0.72rem; }
-.card-actions { display: flex; flex-direction: column; gap: 4px; }
+.pri { color: var(--s-critical); font-weight: 700; font-size: 0.66rem; }
+.card-actions { display: flex; flex-direction: column; gap: 2px; }
 .card-actions button {
   background: none; border: none; color: var(--muted); cursor: pointer;
-  font-size: 0.85rem; padding: 2px 4px; border-radius: 6px;
+  font-size: 0.8rem; padding: 2px 4px; border-radius: 6px;
 }
 .card-actions button:hover { color: var(--ink); background: var(--wash-task); }
-.edit-area { width: 100%; font: inherit; color: var(--ink); background: var(--page);
+.edit-area { width: 100%; font: inherit; font-size: 0.85rem; color: var(--ink); background: var(--page);
   border: 1px solid var(--border); border-radius: 8px; padding: 8px; resize: vertical; }
 
 /* ---------- empty state ---------- */
 .empty {
   text-align: center; padding: 48px 16px; color: var(--ink-2);
-  border: 1px dashed var(--hairline); border-radius: 14px; margin-top: 16px;
+  border: 1px dashed var(--hairline); border-radius: 12px; margin-top: 20px; font-size: 0.85rem;
 }
-.empty .big { font-size: 2rem; }
+.empty .big { font-size: 1.8rem; }
 .empty button {
   margin-top: 12px; background: var(--c-task); color: #fff; border: none;
-  border-radius: 10px; font: inherit; font-weight: 650; padding: 8px 18px; cursor: pointer;
+  border-radius: 8px; font: inherit; font-weight: 650; padding: 8px 18px; cursor: pointer;
 }
 
-footer { margin-top: 40px; text-align: center; font-size: 0.75rem; color: var(--muted); }
-footer a { color: var(--ink-2); }
+footer { margin-top: 48px; text-align: center; font-size: 0.68rem; color: var(--muted); }
 
 .toast {
   position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
   background: var(--ink); color: var(--page); border-radius: 999px;
-  padding: 8px 18px; font-size: 0.85rem; opacity: 0; pointer-events: none;
+  padding: 8px 18px; font-size: 0.78rem; opacity: 0; pointer-events: none;
   transition: opacity 0.25s; z-index: 50; max-width: 90vw; text-align: center;
 }
 .toast.show { opacity: 1; }
@@ -225,43 +245,43 @@ footer a { color: var(--ink-2); }
   <header>
     <div>
       <div class="brand">Braindrop<span class="drop">.</span></div>
-      <div class="tagline">Text it. Forget it. Find it.</div>
+      <div class="tagline">text it · forget it · find it</div>
     </div>
     <div class="toolbar">
-      <button id="notifBtn" title="Get a browser notification when a task comes due">🔔 Remind me</button>
-      <button id="syncBtn" title="Connect a Braindrop worker to sync with Telegram &amp; email capture">⇅ Sync</button>
-      <button id="exportBtn">Export</button>
-      <button id="importBtn">Import</button>
+      <button id="notifBtn" title="Get a browser notification when a task comes due">🔔 remind</button>
+      <button id="syncBtn" title="Connect a Braindrop worker to sync with Telegram &amp; email capture">⇅ sync</button>
+      <button id="exportBtn">export</button>
+      <button id="importBtn">import</button>
       <input type="file" id="importFile" accept=".json" hidden>
     </div>
   </header>
 
   <div class="composer">
     <div class="composer-row">
-      <textarea id="input" rows="1" placeholder="Chuck anything here — “buy milk tomorrow”, “idea: an app that…”, a link, a quote…"></textarea>
-      <button class="send" id="sendBtn" disabled>Drop it</button>
+      <textarea id="input" rows="1" placeholder="chuck anything here — “buy milk tomorrow”, “idea: an app that…”, a link, a quote…"></textarea>
+      <button class="send" id="sendBtn" disabled>+ drop</button>
     </div>
     <div class="hint-row" id="hintRow">
-      <span>It sorts itself: tasks, ideas, notes, links &amp; quotes. Try #tags, “tomorrow 5pm”, “urgent”.</span>
+      <span>it sorts itself: tasks, ideas, notes, links &amp; quotes · try #tags, “tomorrow 5pm”, “urgent”</span>
     </div>
   </div>
 
   <div class="tiles" role="group" aria-label="Summary">
-    <div class="tile"><div class="val" id="tOpen">0</div><div class="lbl">Open tasks</div></div>
-    <div class="tile"><div class="val" id="tDue">0</div><div class="lbl">Due today</div><div class="sub" id="tOver"></div></div>
-    <div class="tile"><div class="val" id="tIdeas">0</div><div class="lbl">Ideas captured</div></div>
-    <div class="tile"><div class="val" id="tAll">0</div><div class="lbl">Total drops</div></div>
+    <div class="tile"><span class="val" id="tOpen">0</span><span class="lbl">open tasks</span></div>
+    <div class="tile"><span class="val" id="tDue">0</span><span class="lbl">due today</span><span class="sub" id="tOver"></span></div>
+    <div class="tile"><span class="val" id="tIdeas">0</span><span class="lbl">ideas</span></div>
+    <div class="tile"><span class="val" id="tAll">0</span><span class="lbl">drops</span></div>
   </div>
 
   <div class="filters" id="filters">
-    <input class="search" id="search" type="search" placeholder="Search drops &amp; #tags…">
+    <input class="search" id="search" type="search" placeholder="search by text, #tag…">
   </div>
 
   <div id="list"></div>
 
   <footer>
-    Local-first: drops live in <em>your</em> browser. Connect a sync worker (⇅) to capture from Telegram &amp; email too.<br>
-    Braindrop concept demo · built with plain HTML/CSS/JS
+    local-first: drops live in <em>your</em> browser · connect a sync worker (⇅) to capture from telegram &amp; email<br>
+    braindrop concept demo · plain html/css/js
   </footer>
 </div>
 
@@ -272,15 +292,16 @@ footer a { color: var(--ink-2); }
 /* ================= data ================= */
 const KEY = "braindrop.v1";
 const TYPES = {
-  task:  { icon: "✓",  label: "Task"  },
-  idea:  { icon: "💡", label: "Idea"  },
-  note:  { icon: "📝", label: "Note"  },
-  link:  { icon: "🔗", label: "Link"  },
-  quote: { icon: "❝",  label: "Quote" },
+  task:  { icon: "✓",  label: "task"  },
+  idea:  { icon: "💡", label: "idea"  },
+  note:  { icon: "📝", label: "note"  },
+  link:  { icon: "🔗", label: "link"  },
+  quote: { icon: "❝",  label: "quote" },
 };
 let drops = load();
 let filter = "all";
 let query = "";
+const expanded = new Set();
 
 function load() {
   try { return JSON.parse(localStorage.getItem(KEY)) || []; }
@@ -421,21 +442,33 @@ function classify(raw) {
 const $ = id => document.getElementById(id);
 const esc = s => s.replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
 
+function linkify(s) {
+  return s.replace(/(https?:\/\/[^\s<]+)/gi, u => `<a href="${u}" target="_blank" rel="noopener">${u.length > 60 ? u.slice(0, 57) + "…" : u}</a>`);
+}
+
 function fmtContent(d) {
-  let h = esc(d.text);
-  h = h.replace(/(https?:\/\/[^\s<]+)/gi, u => `<a href="${u}" target="_blank" rel="noopener">${u.length > 60 ? u.slice(0, 57) + "…" : u}</a>`);
-  h = h.replace(/#([\p{L}\p{N}_-]+)/gu, '<span class="tag">#$1</span>');
+  let h = linkify(esc(d.text));
+  // (^|\s) guard: never match the "#39" inside escaped entities like &#39;
+  h = h.replace(/(^|\s)#([\p{L}\p{N}_-]+)/gu, '$1<span class="tag">#$2</span>');
   if (d.type === "quote") h = `<blockquote>${h}</blockquote>`;
   return h;
 }
 
-function relTime(ts) {
-  const s = (Date.now() - ts) / 1000;
-  if (s < 60) return "just now";
-  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
-  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
-  if (s < 86400 * 7) return `${Math.floor(s / 86400)}d ago`;
-  return new Date(ts).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+function stamp(ts) {
+  const d = new Date(ts);
+  return d.toLocaleDateString(undefined, { month: "short", day: "numeric" }) +
+    " · " + d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+}
+
+function groupLabel(ts) {
+  const d = new Date(ts), now = new Date();
+  const yest = new Date(now.getTime() - 864e5);
+  if (d.toDateString() === now.toDateString()) return "today";
+  if (d.toDateString() === yest.toDateString()) return "yesterday";
+  return d.toLocaleDateString(undefined, {
+    month: "short", day: "numeric",
+    ...(d.getFullYear() !== now.getFullYear() ? { year: "numeric" } : {}),
+  });
 }
 
 function dueInfo(d) {
@@ -457,8 +490,9 @@ function isDueToday(d) {
 function isOverdue(d) { return d.due && !d.done && d.due < Date.now(); }
 
 function card(d) {
-  const t = TYPES[d.type];
+  const t = TYPES[d.type] || TYPES.note;
   const due = dueInfo(d);
+  const isOpen = expanded.has(d.id);
   const el = document.createElement("div");
   el.className = "card" + (d.done ? " done" : "");
   el.style.setProperty("--type-c", `var(--c-${d.type})`);
@@ -466,15 +500,18 @@ function card(d) {
   el.innerHTML = `
     ${d.type === "task" ? `<button class="checkbox" aria-label="Mark done" data-act="toggle">${d.done ? "✓" : ""}</button>` : ""}
     <div class="card-main">
+      <div class="stamp">${stamp(d.created)}</div>
       <div class="content">${fmtContent(d)}</div>
+      ${d.body ? `
+        <div class="context ${isOpen ? "" : "collapsed"}">${linkify(esc(d.body))}</div>
+        <button class="ctx-toggle" data-act="ctx">${isOpen ? "▴ collapse" : "▾ show full email"}</button>` : ""}
       <div class="meta">
         <span class="badge">${t.icon} ${t.label}</span>
         ${d.priority && !d.done ? `<span class="pri">‼ urgent</span>` : ""}
         ${due ? `<span class="due ${due.cls}">${due.label}</span>` : ""}
-        <span>${relTime(d.created)}</span>
-        ${d.source === "telegram" ? `<span title="Captured via Telegram">✈ Telegram</span>` : ""}
-        ${d.source === "email" ? `<span title="Captured via email${d.emailFrom ? " from " + esc(d.emailFrom) : ""}">✉ Email</span>` : ""}
-        ${(d.tags || []).filter(t => !d.text.toLowerCase().includes("#" + t)).map(t => `<span class="tag">#${esc(t)}</span>`).join(" ")}
+        ${d.source === "telegram" ? `<span title="Captured via Telegram">✈</span>` : ""}
+        ${d.source === "email" ? `<span title="Captured via email${d.emailFrom ? " from " + esc(d.emailFrom) : ""}">✉${d.emailFrom ? " " + esc(d.emailFrom.replace(/<.*$/, "").trim() || d.emailFrom) : ""}</span>` : ""}
+        ${(d.tags || []).filter(t2 => !d.text.toLowerCase().includes("#" + t2)).map(t2 => `<span class="tag">#${esc(t2)}</span>`).join(" ")}
       </div>
     </div>
     <div class="card-actions">
@@ -490,6 +527,10 @@ function card(d) {
     }
     const act = e.target.closest("[data-act]")?.dataset.act;
     if (!act) return;
+    if (act === "ctx") {
+      if (expanded.has(d.id)) expanded.delete(d.id); else expanded.add(d.id);
+      render();
+    }
     if (act === "toggle") {
       d.done = !d.done; save(); render();
       if (sync) remotePush(apiCall(`/api/drops/${d.id}`, { method: "PATCH", body: JSON.stringify({ done: d.done }) }));
@@ -531,7 +572,8 @@ function matches(d) {
   else if (filter !== "all" && filter !== "done" && d.type !== filter) return false;
   if (query) {
     const q = query.toLowerCase();
-    if (!d.text.toLowerCase().includes(q) && !d.tags.some(t => ("#" + t).includes(q) || t.includes(q.replace(/^#/, "")))) return false;
+    const hay = (d.text + " " + (d.body || "")).toLowerCase();
+    if (!hay.includes(q) && !(d.tags || []).some(t => ("#" + t).includes(q) || t.includes(q.replace(/^#/, "")))) return false;
   }
   return true;
 }
@@ -555,44 +597,46 @@ function render() {
   if (!drops.length) {
     list.innerHTML = `<div class="empty">
       <div class="big">🧠→📥</div>
-      <p><b>Your brain has an inbox now.</b><br>Type anything above — or load a few examples to see how it sorts.</p>
-      <button id="seedBtn">Show me with demo drops</button></div>`;
+      <p><b>your brain has an inbox now.</b><br>type anything above — or load a few examples to see how it sorts.</p>
+      <button id="seedBtn">show me with demo drops</button></div>`;
     $("seedBtn").addEventListener("click", seed);
     return;
   }
   if (!visible.length) {
-    list.innerHTML = `<div class="empty"><p>Nothing matches this filter.</p></div>`;
+    list.innerHTML = `<div class="empty"><p>nothing matches this filter.</p></div>`;
     return;
   }
 
-  const attention = visible.filter(d => (isOverdue(d) || isDueToday(d)));
+  const addGroup = (label, items, cls) => {
+    const h = document.createElement("div");
+    h.className = "group-h" + (cls ? " " + cls : "");
+    h.textContent = label;
+    list.appendChild(h);
+    const c = document.createElement("div"); c.className = "cards";
+    items.forEach(d => c.appendChild(card(d)));
+    list.appendChild(c);
+  };
+
+  const attention = visible.filter(d => isOverdue(d) || isDueToday(d));
   const rest = visible.filter(d => !attention.includes(d));
 
   if (attention.length) {
-    const h = document.createElement("div");
-    h.className = "section-h attention";
-    h.textContent = "⚠ Needs attention";
-    list.appendChild(h);
-    const c = document.createElement("div"); c.className = "cards";
-    attention.sort((a, b) => a.due - b.due).forEach(d => c.appendChild(card(d)));
-    list.appendChild(c);
+    addGroup("⚠ needs attention", [...attention].sort((a, b) => a.due - b.due), "attention");
   }
-  if (rest.length) {
-    if (attention.length) {
-      const h = document.createElement("div");
-      h.className = "section-h"; h.textContent = "Everything else";
-      list.appendChild(h);
-    }
-    const c = document.createElement("div"); c.className = "cards";
-    rest.forEach(d => c.appendChild(card(d)));
-    list.appendChild(c);
+  let currentLabel = null, bucket = [];
+  const flush = () => { if (bucket.length) addGroup(currentLabel, bucket); bucket = []; };
+  for (const d of rest) {
+    const label = groupLabel(d.created);
+    if (label !== currentLabel) { flush(); currentLabel = label; }
+    bucket.push(d);
   }
+  flush();
 }
 
 /* ---------- filters ---------- */
 function buildFilters() {
   const bar = $("filters");
-  const defs = [["all", "All", null], ...Object.entries(TYPES).map(([k, v]) => [k, v.label + "s", k]), ["done", "Done ✓", null]];
+  const defs = [["all", "all", null], ...Object.entries(TYPES).map(([k, v]) => [k, v.label + "s", k]), ["done", "done ✓", null]];
   defs.reverse().forEach(([key, label, colorKey]) => {
     const b = document.createElement("button");
     b.className = "chip" + (filter === key ? " active" : "");
@@ -619,7 +663,7 @@ input.addEventListener("input", () => {
   if (!v) { hintRow.innerHTML = defaultHint; return; }
   const p = classify(v);
   const t = TYPES[p.type];
-  hintRow.innerHTML = `<span class="detect">Filed as <b style="color:var(--c-${p.type})">${t.icon} ${t.label}</b></span>` +
+  hintRow.innerHTML = `<span class="detect">filed as <b style="color:var(--c-${p.type})">${t.icon} ${t.label}</b></span>` +
     (p.due ? `<span class="detect">⏰ <b>${new Date(p.due).toLocaleString(undefined, { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}</b></span>` : "") +
     (p.tags.length ? `<span class="detect">${p.tags.map(x => "#" + x).join(" ")}</span>` : "") +
     (p.priority ? `<span class="detect" style="color:var(--s-critical)">‼ urgent</span>` : "") +
@@ -639,7 +683,7 @@ function submit() {
   input.value = ""; input.style.height = "auto";
   sendBtn.disabled = true; hintRow.innerHTML = defaultHint;
   render();
-  toast(`${TYPES[d.type].icon} Dropped as ${TYPES[d.type].label.toLowerCase()}${d.due ? " · reminder set" : ""}`);
+  toast(`${TYPES[d.type].icon} dropped as ${TYPES[d.type].label}${d.due ? " · reminder set" : ""}`);
   if (sync) {
     // Server classifies too (with Claude when configured) and becomes the source of truth.
     remotePush(apiCall("/api/drops", { method: "POST", body: JSON.stringify({ text: v }) }).then(remote => {
@@ -717,6 +761,10 @@ function seed() {
   drops = [
     mk("Call the dentist to reschedule tomorrow at 10am #health", 2 * H),
     mk("Idea: a plant-care app that texts you when your plants are thirsty #apps", 5 * H),
+    mk("Grandma's gumbo — worth trying #recipes", 7 * H, {
+      source: "email", emailFrom: "aunt.carol@example.com",
+      body: "Ingredients:\n- 1 lb andouille sausage\n- 1 lb shrimp\n- 1 cup okra\n- roux: 1/2 cup flour, 1/2 cup oil\n\nBrown the roux slowly — 30 minutes, don't rush it. Add the trinity, then stock. Simmer 90 minutes. Shrimp in the last 5.",
+    }),
     mk("“The best way to predict the future is to invent it.” — Alan Kay", 8 * H),
     mk("https://developer.mozilla.org/en-US/docs/Web/API/Notification great reference for web notifications #dev", 26 * H),
     mk("Pay the water bill!! urgent", 30 * H, { due: now - 2 * H, dueLabel: "yesterday" }),
@@ -740,7 +788,7 @@ $("syncBtn").addEventListener("click", async () => {
   try {
     await apiCall("/api/drops");
     localStorage.setItem(SYNC_KEY, JSON.stringify(sync));
-    $("syncBtn").textContent = "⇅ Synced";
+    $("syncBtn").textContent = "⇅ synced";
     toast("⇅ Connected — Telegram & email drops will appear here");
     refreshRemote(false);
   } catch (e) {
@@ -759,7 +807,7 @@ setInterval(render, 60000);
 if (sync) {
   refreshRemote();
   setInterval(refreshRemote, 30000);
-  $("syncBtn").textContent = "⇅ Synced";
+  $("syncBtn").textContent = "⇅ synced";
 }
 </script>
 </body>
