@@ -3,7 +3,7 @@
 A single-file Worker that turns Braindrop from a browser toy into a real capture service:
 
 - **Telegram bot** — text thoughts from your phone; the bot classifies, files, and confirms.
-- **Email-in** — forward starred / to-do emails; subject + body get cleaned and classified.
+- **Email-in** — forward starred / to-do emails; the subject is classified and the full message is kept.
 - **Claude classification** — with an `ANTHROPIC_API_KEY` set, drops are classified by the Claude API (type, tags, due date, priority) via structured outputs; without one, a regex parser takes over.
 - **Sync API** — the dashboard reads/writes the shared store, so your phone captures show up on the web.
 
@@ -55,7 +55,7 @@ Two options:
 https://braindrop-worker.<you>.workers.dev/email?token=<EMAIL_TOKEN>
 ```
 
-The handler accepts Postmark JSON and Mailgun/SendGrid form payloads, strips `Fwd:` noise and quoted reply text, and classifies subject + body as one drop.
+The handler accepts Postmark JSON and Mailgun/SendGrid form payloads, strips `Fwd:` noise and quoted reply text, and classifies the subject (plus anything typed above a forward). The full message stays on the drop, collapsed, and dates buried in the forwarded body are not treated as deadlines.
 
 **Tip for Gmail users:** set up a Gmail filter that auto-forwards starred or labeled emails to your drop address — starring an email then becomes the capture gesture.
 
