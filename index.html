@@ -206,7 +206,30 @@ header {
 .due.later  { background: var(--wash-task); color: var(--c-task); }
 .due.today  { background: var(--wash-warning); color: var(--ink); }
 .due.over   { background: var(--wash-critical); color: var(--s-critical); }
+.due.past   { color: var(--muted); background: transparent; font-weight: 550; padding-left: 0; }
 .due.done-badge { background: var(--wash-note); color: var(--s-good-text); }
+.pile-actions { display: inline-flex; gap: 4px; }
+.mini {
+  background: none; border: 1px solid var(--border); border-radius: 999px;
+  color: var(--ink-2); font: inherit; font-size: 0.66rem; line-height: 1.7;
+  padding: 0 8px; cursor: pointer;
+}
+.mini:hover { border-color: var(--muted); color: var(--ink); }
+.stale-bar {
+  display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center;
+  gap: 8px 12px; margin: 16px 0 4px; padding: 10px 12px;
+  border: 1px dashed var(--hairline); border-radius: 10px;
+  background: var(--surface); color: var(--ink-2); font-size: 0.75rem;
+}
+.stale-bar p { margin: 0; max-width: 68ch; }
+.stale-bar b { color: var(--ink); font-weight: 650; }
+.stale-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.stale-actions button {
+  background: none; border: 1px solid var(--border); border-radius: 999px;
+  color: var(--ink-2); font: inherit; font-size: 0.72rem; padding: 3px 12px; cursor: pointer;
+}
+.stale-actions button:hover { border-color: var(--muted); color: var(--ink); }
+.stale-actions button.primary { border-color: var(--ink); color: var(--ink); font-weight: 650; }
 .pri { color: var(--s-critical); font-weight: 700; font-size: 0.66rem; }
 .card-actions { display: flex; flex-direction: column; gap: 2px; }
 .card-actions button {
@@ -287,6 +310,7 @@ footer { margin-top: 48px; text-align: center; font-size: 0.68rem; color: var(--
 
 <div class="toast" id="toast"></div>
 
+<script src="logic.js"></script>
 <script>
 "use strict";
 /* ================= data ================= */
@@ -301,7 +325,10 @@ const TYPES = {
 let drops = load();
 let filter = "all";
 let query = "";
+let reviewStale = false;
 const expanded = new Set();
+const L = window.BraindropLogic;
+const classify = L.classify;
 
 function load() {
   try { return JSON.parse(localStorage.getItem(KEY)) || []; }
@@ -326,10 +353,24 @@ async function apiCall(path, options = {}) {
   return res.status === 204 ? null : res.json();
 }
 
+function mergeAttention(local, remote) {
+  if (!local) return remote;
+  // An older worker ignores dismiss/snooze fields. Keep the local choice
+  // until a worker that stores them answers with the field present.
+  if (local.attentionDismissed && remote.attentionDismissed == null) remote.attentionDismissed = true;
+  if (local.attentionSnoozed && remote.attentionSnoozed == null) {
+    remote.attentionSnoozed = true;
+    remote.attentionUntil = local.attentionUntil;
+  }
+  return remote;
+}
+
 async function refreshRemote(silent = true) {
   if (!sync) return;
   try {
-    drops = await apiCall("/api/drops");
+    const remote = await apiCall("/api/drops");
+    const localById = new Map(drops.map(d => [d.id, d]));
+    drops = remote.map(d => mergeAttention(localById.get(d.id), d));
     save();
     render();
   } catch (e) {
@@ -342,101 +383,8 @@ function remotePush(promise) {
   promise.catch(() => toast("⚠ Sync failed — change is local only"));
 }
 
-/* ================= parser ================= */
-const RE_URL   = /(https?:\/\/[^\s<]+)/i;
-const RE_TAG   = /#([\p{L}\p{N}_-]+)/gu;
-const RE_TASK  = /\b(todo|to-do|remind me|need(s)? to|don'?t forget|must|buy|get|pick up|call|phone|email|text|message|pay|book|schedule|renew|cancel|return|order|fix|repair|clean|finish|submit|file|sign up|register|deadline|due|appointment|rsvp|water|feed|take out)\b/i;
-const RE_IDEA  = /^(idea|concept)[:\s]|\b(what if|imagine|app (for|that|idea)|startup|business idea|feature idea|could (we|i) (build|make)|side project)\b/i;
-const RE_QUOTE = /^\s*["“].+["”]\s*([—–-].+)?$/s;
-const RE_PRI   = /(!{2,}|\burgent(ly)?\b|\basap\b|\bimportant\b|\bcritical\b)/i;
-const RE_OVERRIDE = /^(task|idea|note|link|quote)\s*:\s*/i;
-
-const DAYS = ["sunday","monday","tuesday","wednesday","thursday","friday","saturday"];
-const MONTHS = ["january","february","march","april","may","june","july","august","september","october","november","december"];
-
-function parseWhen(text) {
-  const now = new Date();
-  const lower = text.toLowerCase();
-  let d = null, matched = null;
-
-  const set = (base, label) => { d = base; matched = label; };
-  const at = (date, h, m) => { const x = new Date(date); x.setHours(h, m || 0, 0, 0); return x; };
-
-  let m;
-  if ((m = lower.match(/\bin (\d+) (minute|min|hour|hr|day|week|month)s?\b/))) {
-    const n = +m[1]; const x = new Date(now);
-    if (/min/.test(m[2])) x.setMinutes(x.getMinutes() + n);
-    else if (/h/.test(m[2])) x.setHours(x.getHours() + n);
-    else if (m[2] === "day") x.setDate(x.getDate() + n);
-    else if (m[2] === "week") x.setDate(x.getDate() + 7 * n);
-    else x.setMonth(x.getMonth() + n);
-    set(x, m[0]);
-  } else if (lower.includes("day after tomorrow")) {
-    const x = new Date(now); x.setDate(x.getDate() + 2); set(at(x, 9), "day after tomorrow");
-  } else if (/\btomorrow\b/.test(lower)) {
-    const x = new Date(now); x.setDate(x.getDate() + 1); set(at(x, 9), "tomorrow");
-  } else if (/\btonight\b/.test(lower)) {
-    set(at(now, 20), "tonight");
-  } else if (/\btoday\b/.test(lower)) {
-    set(at(now, 18), "today");
-  } else if (/\bnext week\b/.test(lower)) {
-    const x = new Date(now); x.setDate(x.getDate() + 7); set(at(x, 9), "next week");
-  } else if ((m = lower.match(/\b(next )?(sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b/))) {
-    const target = DAYS.indexOf(m[2]);
-    let delta = (target - now.getDay() + 7) % 7;
-    if (delta === 0) delta = 7;
-    if (m[1]) delta = delta <= 7 ? delta + (delta < 7 ? 7 : 0) : delta;
-    const x = new Date(now); x.setDate(x.getDate() + delta); set(at(x, 9), m[0]);
-  } else if ((m = lower.match(/\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\.? (\d{1,2})(st|nd|rd|th)?\b/))) {
-    const mi = MONTHS.findIndex(mm => mm.startsWith(m[1].replace(".", "").slice(0, 3)));
-    const x = new Date(now.getFullYear(), mi, +m[2], 9, 0, 0, 0);
-    if (x < now) x.setFullYear(x.getFullYear() + 1);
-    set(x, m[0]);
-  }
-
-  if ((m = lower.match(/\b(?:at|by|@)\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b/)) && (m[3] || m[2])) {
-    let h = +m[1];
-    if (m[3] === "pm" && h < 12) h += 12;
-    if (m[3] === "am" && h === 12) h = 0;
-    const base = d || now;
-    const x = at(base, h, m[2] ? +m[2] : 0);
-    if (!d && x < now) x.setDate(x.getDate() + 1);
-    d = x; matched = (matched ? matched + " " : "") + m[0];
-  }
-  return d ? { due: d.getTime(), matched } : null;
-}
-
-function classify(raw) {
-  let text = raw.trim();
-  let type = null;
-
-  const ov = text.match(RE_OVERRIDE);
-  if (ov) { type = ov[1].toLowerCase(); text = text.slice(ov[0].length).trim() || text; }
-
-  const tags = [...text.matchAll(RE_TAG)].map(m => m[1].toLowerCase());
-  const when = parseWhen(text);
-  const priority = RE_PRI.test(text);
-
-  if (!type) {
-    if (RE_QUOTE.test(text)) type = "quote";
-    else if (RE_URL.test(text) && text.replace(RE_URL, "").trim().length < 60) type = "link";
-    else if (RE_TASK.test(text) || (when && !RE_IDEA.test(text))) type = "task";
-    else if (RE_IDEA.test(text)) type = "idea";
-    else if (RE_URL.test(text)) type = "link";
-    else type = "note";
-  }
-
-  return {
-    id: Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
-    text, type, tags,
-    due: when ? when.due : null,
-    dueLabel: when ? when.matched : null,
-    priority,
-    done: false,
-    created: Date.now(),
-    notified: false,
-  };
-}
+/* Classification, attention, and email titles live in logic.js so a
+   populated board can age old email dates out without rewriting stored drops. */
 
 /* ================= rendering ================= */
 const $ = id => document.getElementById(id);
@@ -446,8 +394,8 @@ function linkify(s) {
   return s.replace(/(https?:\/\/[^\s<]+)/gi, u => `<a href="${u}" target="_blank" rel="noopener">${u.length > 60 ? u.slice(0, 57) + "…" : u}</a>`);
 }
 
-function fmtContent(d) {
-  let h = linkify(esc(d.text));
+function fmtContent(d, text = d.text) {
+  let h = linkify(esc(text));
   // (^|\s) guard: never match the "#39" inside escaped entities like &#39;
   h = h.replace(/(^|\s)#([\p{L}\p{N}_-]+)/gu, '$1<span class="tag">#$2</span>');
   if (d.type === "quote") h = `<blockquote>${h}</blockquote>`;
@@ -471,39 +419,39 @@ function groupLabel(ts) {
   });
 }
 
-function dueInfo(d) {
-  if (!d.due) return null;
-  const now = new Date();
-  const due = new Date(d.due);
-  const sameDay = due.toDateString() === now.toDateString();
-  const timeStr = due.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
-  const dateStr = due.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
-  if (d.done) return { cls: "done-badge", label: `✓ was due ${sameDay ? timeStr : dateStr}` };
-  if (due < now) return { cls: "over", label: `⚠ overdue · ${sameDay ? timeStr : dateStr}` };
-  if (sameDay) return { cls: "today", label: `⏰ today ${timeStr}` };
-  return { cls: "later", label: `📅 ${dateStr} ${timeStr}` };
+function attentionPayload(d) {
+  return {
+    done: !!d.done,
+    attentionDismissed: !!d.attentionDismissed,
+    attentionSnoozed: !!d.attentionSnoozed,
+    attentionUntil: d.attentionUntil || null,
+  };
+}
+function syncPatch(d, fields) {
+  if (!sync) return;
+  remotePush(apiCall(`/api/drops/${d.id}`, { method: "PATCH", body: JSON.stringify(fields) }));
 }
 
-function isDueToday(d) {
-  return d.due && !d.done && new Date(d.due).toDateString() === new Date().toDateString();
-}
-function isOverdue(d) { return d.due && !d.done && d.due < Date.now(); }
-
-function card(d) {
+function card(d, pile = false) {
   const t = TYPES[d.type] || TYPES.note;
-  const due = dueInfo(d);
+  const due = L.dueBadge(d);
+  const view = L.emailView(d);
   const isOpen = expanded.has(d.id);
+  const folded = isOpen ? view.expanded : view.collapsed;
   const el = document.createElement("div");
   el.className = "card" + (d.done ? " done" : "");
   el.style.setProperty("--type-c", `var(--c-${d.type})`);
   el.style.setProperty("--type-wash", `var(--wash-${d.type})`);
+  const pileBtns = pile ? `<span class="pile-actions">${
+    d.type === "task" ? "" : `<button type="button" class="mini" data-act="toggle">done</button>`
+  }<button type="button" class="mini" data-act="snooze" title="Hide for a week, then bring it back. Keeps the text.">snooze</button><button type="button" class="mini" data-act="dismiss" title="Remove from Needs attention. Keeps the text.">dismiss</button></span>` : "";
   el.innerHTML = `
     ${d.type === "task" ? `<button class="checkbox" aria-label="Mark done" data-act="toggle">${d.done ? "✓" : ""}</button>` : ""}
     <div class="card-main">
       <div class="stamp">${stamp(d.created)}</div>
-      <div class="content">${fmtContent(d)}</div>
-      ${d.body ? `
-        <div class="context ${isOpen ? "" : "collapsed"}">${linkify(esc(d.body))}</div>
+      <div class="content" title="${esc(d.text.replace(/\s+/g, " "))}">${fmtContent(d, view.title)}</div>
+      ${view.hasMore ? `
+        <div class="context ${isOpen ? "" : "collapsed"}">${linkify(esc(folded))}</div>
         <button class="ctx-toggle" data-act="ctx">${isOpen ? "▴ collapse" : "▾ show full email"}</button>` : ""}
       <div class="meta">
         <span class="badge">${t.icon} ${t.label}</span>
@@ -511,7 +459,8 @@ function card(d) {
         ${due ? `<span class="due ${due.cls}">${due.label}</span>` : ""}
         ${d.source === "telegram" ? `<span title="Captured via Telegram">✈</span>` : ""}
         ${d.source === "email" ? `<span title="Captured via email${d.emailFrom ? " from " + esc(d.emailFrom) : ""}">✉${d.emailFrom ? " " + esc(d.emailFrom.replace(/<.*$/, "").trim() || d.emailFrom) : ""}</span>` : ""}
-        ${(d.tags || []).filter(t2 => !d.text.toLowerCase().includes("#" + t2)).map(t2 => `<span class="tag">#${esc(t2)}</span>`).join(" ")}
+        ${(d.tags || []).filter(t2 => !view.title.toLowerCase().includes("#" + t2)).map(t2 => `<span class="tag">#${esc(t2)}</span>`).join(" ")}
+        ${pileBtns}
       </div>
     </div>
     <div class="card-actions">
@@ -533,7 +482,20 @@ function card(d) {
     }
     if (act === "toggle") {
       d.done = !d.done; save(); render();
-      if (sync) remotePush(apiCall(`/api/drops/${d.id}`, { method: "PATCH", body: JSON.stringify({ done: d.done }) }));
+      syncPatch(d, { done: d.done });
+    }
+    if (act === "snooze") {
+      L.snoozeDrop(d);
+      save(); render();
+      syncPatch(d, attentionPayload(d));
+      const when = new Date(d.attentionUntil).toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
+      toast(`Snoozed until ${when} — text kept`);
+    }
+    if (act === "dismiss") {
+      L.dismissDrop(d);
+      save(); render();
+      syncPatch(d, attentionPayload(d));
+      toast("Dismissed from attention — text kept");
     }
     if (act === "del") {
       drops = drops.filter(x => x.id !== d.id); save(); render(); toast("Deleted");
@@ -554,9 +516,9 @@ function startEdit(el, d) {
     const v = ta.value.trim();
     if (v && v !== d.text) {
       const re = classify(v);
-      d.text = re.text; d.tags = re.tags;
-      if (re.due) { d.due = re.due; d.dueLabel = re.dueLabel; d.notified = false; }
-      d.priority = re.priority;
+      d.text = re.text; d.type = re.type; d.tags = re.tags; d.priority = re.priority;
+      if (re.type !== "task") { d.due = null; d.dueLabel = null; }
+      else if (re.due) { d.due = re.due; d.dueLabel = re.dueLabel; d.notified = false; }
       save();
       if (sync) remotePush(apiCall(`/api/drops/${d.id}`, { method: "PATCH", body: JSON.stringify({ text: v }) }).then(() => refreshRemote()));
     }
@@ -578,16 +540,44 @@ function matches(d) {
   return true;
 }
 
+function renderStaleBar(list, items) {
+  const n = items.length;
+  const noun = n === 1 ? "older capture is" : "older captures are";
+  const bar = document.createElement("div");
+  bar.className = "stale-bar";
+  bar.innerHTML = `
+    <p><b>${n} ${noun}</b> off Needs attention. A date pulled from the original text is not a live deadline — dismissing keeps the wording.</p>
+    <div class="stale-actions">
+      <button type="button" class="primary" data-stale="dismiss">dismiss from attention</button>
+      <button type="button" data-stale="snooze">snooze a week</button>
+      <button type="button" data-stale="review">${reviewStale ? "hide" : "review"}</button>
+    </div>`;
+  bar.querySelector('[data-stale="dismiss"]').addEventListener("click", () => {
+    items.forEach(d => { L.dismissDrop(d); syncPatch(d, attentionPayload(d)); });
+    save(); render();
+    toast(`Dismissed ${n} from attention — text kept`);
+  });
+  bar.querySelector('[data-stale="snooze"]').addEventListener("click", () => {
+    items.forEach(d => { L.snoozeDrop(d); syncPatch(d, attentionPayload(d)); });
+    save(); render();
+    toast(`Snoozed ${n} for a week — text kept`);
+  });
+  bar.querySelector('[data-stale="review"]').addEventListener("click", () => {
+    reviewStale = !reviewStale;
+    render();
+  });
+  list.appendChild(bar);
+}
+
 function render() {
-  /* stats */
-  const openTasks = drops.filter(d => d.type === "task" && !d.done);
-  const dueToday = drops.filter(isDueToday);
-  const overdue = drops.filter(isOverdue).filter(d => !isDueToday(d));
-  $("tOpen").textContent = openTasks.length;
-  $("tDue").textContent = dueToday.length;
-  $("tOver").textContent = overdue.length ? `+${overdue.length} overdue` : "";
-  $("tIdeas").textContent = drops.filter(d => d.type === "idea").length;
-  $("tAll").textContent = drops.length;
+  /* stats — overdue counts only tasks inside the short window, not old email dates */
+  const now = Date.now();
+  const stats = L.boardStats(drops, now);
+  $("tOpen").textContent = stats.openTasks;
+  $("tDue").textContent = stats.dueToday;
+  $("tOver").textContent = stats.overdue ? `+${stats.overdue} overdue` : "";
+  $("tIdeas").textContent = stats.ideas;
+  $("tAll").textContent = stats.all;
 
   /* list */
   const list = $("list");
@@ -607,21 +597,22 @@ function render() {
     return;
   }
 
-  const addGroup = (label, items, cls) => {
+  const addGroup = (label, items, cls, pile) => {
     const h = document.createElement("div");
     h.className = "group-h" + (cls ? " " + cls : "");
     h.textContent = label;
     list.appendChild(h);
     const c = document.createElement("div"); c.className = "cards";
-    items.forEach(d => c.appendChild(card(d)));
+    items.forEach(d => c.appendChild(card(d, pile)));
     list.appendChild(c);
   };
 
-  const attention = visible.filter(d => isOverdue(d) || isDueToday(d));
-  const rest = visible.filter(d => !attention.includes(d));
+  const { attention, stale, rest } = L.partitionBoard(visible, now);
 
-  if (attention.length) {
-    addGroup("⚠ needs attention", [...attention].sort((a, b) => a.due - b.due), "attention");
+  if (attention.length) addGroup("⚠ needs attention", attention, "attention", true);
+  if (stale.length) {
+    renderStaleBar(list, stale);
+    if (reviewStale) addGroup("older captures", stale, "", true);
   }
   let currentLabel = null, bucket = [];
   const flush = () => { if (bucket.length) addGroup(currentLabel, bucket); bucket = []; };
@@ -714,8 +705,10 @@ setInterval(() => {
   const now = Date.now();
   let changed = false;
   drops.forEach(d => {
-    if (d.due && !d.done && !d.notified && d.due <= now) {
-      new Notification("Braindrop reminder", { body: d.text });
+    // Only tasks, and only if the due time just passed. Months-old email
+    // dates must not fire a pile of notifications on the next page load.
+    if (d.type === "task" && d.due && !d.done && !d.notified && !d.attentionDismissed && d.due <= now && now - d.due < 60 * 60 * 1000) {
+      new Notification("Braindrop reminder", { body: L.displayTitle(d) });
       d.notified = true; changed = true;
     }
   });

@@ -14,7 +14,7 @@ Braindrop is a thought-capture app in the spirit of Mindchuk: throw anything at 
 - **Auto-classification** — heuristics sort each drop into **Task / Idea / Note / Link / Quote** (prefix with `idea:`, `note:`, etc. to override).
 - **Natural-language dates** — "tomorrow at 10am", "next friday", "in 2 hours" become due dates and reminders.
 - **#tags and priority** — hashtags are extracted and searchable; "urgent", "asap", or "!!" flags a drop.
-- **Dashboard** — stat tiles (open tasks, due today + overdue, ideas, total), a "Needs attention" section pinning overdue/due-today items, type filters, and full-text/tag search.
+- **Dashboard** — stat tiles (open tasks, due today + recently overdue, ideas, total), a "Needs attention" section for what's due today, overdue within a week, or still urgent. Months-old email dates drop off that list; dismiss or snooze them without deleting the text. Type filters and full-text/tag search stay.
 - **Reminders** — optional browser notifications when a task comes due (while a tab is open).
 - **Local-first** — drops live in your browser's localStorage; export/import as JSON. No build step, no dependencies, no account.
 
@@ -23,7 +23,7 @@ Braindrop is a thought-capture app in the spirit of Mindchuk: throw anything at 
 A single-file Cloudflare Worker (free tier) that makes capture work from anywhere:
 
 - **Telegram bot** — text your bot from your phone; it classifies, files, and replies with how it filed the drop. `/due` lists what needs attention.
-- **Email-in** — forward starred / to-do emails to a drop address (Cloudflare Email Routing, or any inbound-email webhook). Subject + body are cleaned and classified as one drop. Pair it with a Gmail auto-forward filter and *starring an email becomes the capture gesture*.
+- **Email-in** — forward starred / to-do emails to a drop address (Cloudflare Email Routing, or any inbound-email webhook). The subject is classified; the full message stays attached and collapsed. Pair it with a Gmail auto-forward filter and *starring an email becomes the capture gesture*.
 - **Claude classification** — with an API key set, the Claude API classifies each drop (type, tags, inferred topics, due date, priority) using structured outputs; without one, the same regex heuristics as the dashboard take over.
 - **Sync** — the dashboard's **⇅ Sync** button connects it to the worker, so phone and email captures appear on the web dashboard (with ✈/✉ source badges) and edits flow back.
 
