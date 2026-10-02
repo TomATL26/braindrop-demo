@@ -55,7 +55,7 @@ Two options:
 https://braindrop-worker.<you>.workers.dev/email?token=<EMAIL_TOKEN>
 ```
 
-The handler accepts Postmark JSON and Mailgun/SendGrid form payloads, strips `Fwd:` noise and quoted reply text, and classifies subject + body as one drop.
+The handler accepts Postmark JSON and Mailgun/SendGrid form payloads, strips `Fwd:` noise and quoted reply text, and stores subject + body as one drop. A due date is taken from the subject (or a note you typed above the forward), not from dates in the forwarded body.
 
 **Tip for Gmail users:** set up a Gmail filter that auto-forwards starred or labeled emails to your drop address — starring an email then becomes the capture gesture.
 

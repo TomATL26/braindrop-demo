@@ -6,7 +6,7 @@
  *   POST  /email?token=...   Inbound-email webhook (Postmark/Mailgun/SendGrid)
  *   GET   /api/drops         List all drops            (Bearer DASH_TOKEN)
  *   POST  /api/drops         Add a drop  {text}        (Bearer DASH_TOKEN)
- *   PATCH /api/drops/:id     Update      {done|text}   (Bearer DASH_TOKEN)
+ *   PATCH /api/drops/:id     Update {done|text|attentionDismissed|snoozeUntil} (Bearer DASH_TOKEN)
  *   DELETE /api/drops/:id    Delete                    (Bearer DASH_TOKEN)
  *
  * Also exports an `email()` handler for Cloudflare Email Routing, so a
@@ -96,10 +96,26 @@ async function api(request, env, url) {
   if (request.method === "PATCH") {
     const patch = await request.json();
     if (typeof patch.done === "boolean") drops[idx].done = patch.done;
+    if (typeof patch.attentionDismissed === "boolean") drops[idx].attentionDismissed = patch.attentionDismissed;
+    if (patch.snoozeUntil === null) drops[idx].snoozeUntil = null;
+    else if (typeof patch.snoozeUntil === "number" && Number.isFinite(patch.snoozeUntil)) drops[idx].snoozeUntil = patch.snoozeUntil;
     if (typeof patch.text === "string" && patch.text.trim()) {
       const prev = drops[idx];
       const re = await classify(patch.text.trim(), env, prev.source);
-      drops[idx] = { ...re, id: prev.id, created: prev.created, done: prev.done, body: prev.body, emailFrom: prev.emailFrom };
+      drops[idx] = {
+        ...prev,
+        ...re,
+        id: prev.id,
+        created: prev.created,
+        done: prev.done,
+        body: prev.body,
+        emailFrom: prev.emailFrom,
+        source: prev.source,
+        // A rewrite is a fresh look at the drop, so it can surface again.
+        attentionDismissed: false,
+        snoozeUntil: null,
+        notified: false,
+      };
     }
     await saveDrops(env, drops);
     return json(drops[idx]);
@@ -138,13 +154,10 @@ async function telegram(request, env) {
   if (text === "/due") {
     const drops = await loadDrops(env);
     const now = Date.now();
-    const attention = drops
-      .filter((d) => d.due && !d.done)
-      .filter((d) => d.due < now || new Date(d.due).toDateString() === new Date(now).toDateString())
-      .sort((a, b) => a.due - b.due);
+    const attention = drops.filter((d) => needsAttention(d, now)).sort((a, b) => compareAttention(a, b, now));
     await reply(env, msg.chat.id, attention.length
-      ? "⚠ Needs attention:\n" + attention.map((d) => `• ${d.text}`).join("\n")
-      : "Nothing overdue or due today. 🎉");
+      ? "⚠ Needs attention:\n" + attention.map((d) => `• ${listLabel(d)}`).join("\n")
+      : "Nothing due today, recently overdue, or still urgent. 🎉");
     return json({ ok: true });
   }
 
@@ -208,14 +221,21 @@ async function emailWebhook(request, env, url) {
 
 async function captureEmail(env, from, subject, body) {
   const cleanSubject = (subject || "").replace(/^((re|fwd?|fw)\s*:\s*)+/i, "").trim();
-  const cleanBody = extractEmailContent(body || "");
-  if (!cleanSubject && !cleanBody) return null;
+  const parts = splitEmail(body || "");
+  const cleanBody = parts.combined;
+  if (!cleanSubject && !parts.note && !cleanBody) return null;
 
-  // Classify on subject + a slice of body, but keep them separate for display:
-  // the subject is the card title, the body is the expandable context section.
-  const drop = await classify(
-    [cleanSubject, cleanBody.slice(0, 1500)].filter(Boolean).join("\n"), env, "email");
-  drop.text = cleanSubject || cleanBody.split("\n")[0].slice(0, 120);
+  // The subject and any note typed above the forward decide the deadline.
+  // The forwarded body is context for type and tags only — a date inside an
+  // old thread must not become a due date that never ages out.
+  const intent = [parts.note, cleanSubject].filter(Boolean).join("\n").trim()
+    || (cleanBody.split("\n")[0] || "").slice(0, 180);
+  const classifyInput = parts.forwarded
+    ? `${intent}\n\n----- forwarded content (context only) -----\n${parts.forwarded.slice(0, 1500)}`
+    : intent;
+
+  const drop = await classify(classifyInput, env, "email");
+  drop.text = cleanSubject || parts.note || cleanBody.split("\n")[0].slice(0, 120);
   drop.body = cleanBody || undefined;
   drop.emailFrom = from || undefined;
   const drops = await loadDrops(env);
@@ -230,8 +250,8 @@ async function captureEmail(env, from, subject, body) {
  * its From/Date/Subject/To header lines; any note the sender typed above the
  * marker is kept too.
  */
-function extractEmailContent(body) {
-  const normalized = body.replace(/\r\n/g, "\n");
+function splitEmail(body) {
+  const normalized = String(body || "").replace(/\r\n/g, "\n");
   const parts = normalized.split(/^-{2,}\s*Forwarded message\s*-{2,}\s*$/im);
   const note = (parts[0] || "").trim();
   let forwarded = parts.slice(1).join("\n").trim();
@@ -241,11 +261,18 @@ function extractEmailContent(body) {
     while (i < lines.length && (lines[i].trim() === "" || /^\s*(from|date|sent|subject|to|cc)\s*:/i.test(lines[i]))) i++;
     forwarded = lines.slice(i).join("\n").trim();
   }
-  return [note, forwarded].filter(Boolean).join("\n\n")
-    .replace(/^>.*$/gm, "")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim()
-    .slice(0, 4000);
+  const clean = (s) => s.replace(/^>.*$/gm, "").replace(/\n{3,}/g, "\n\n").trim();
+  const noteC = clean(note);
+  const fwdC = clean(forwarded);
+  return {
+    note: noteC.slice(0, 1000),
+    forwarded: fwdC.slice(0, 4000),
+    combined: [noteC, fwdC].filter(Boolean).join("\n\n").slice(0, 4000),
+  };
+}
+
+function extractEmailContent(body) {
+  return splitEmail(body).combined;
 }
 
 /**
@@ -291,6 +318,7 @@ async function classify(text, env, source) {
     }
   }
   if (!result) result = regexClassify(text);
+  if (source === "email") result = applyEmailGuards(result, text);
 
   return {
     id: crypto.randomUUID().slice(0, 12),
@@ -350,10 +378,16 @@ async function claudeClassify(text, env) {
         "When a drop belongs to a collection (e.g. a recipe, a link to one, or a dish to try), " +
         "put that collection name FIRST in tags, spelled exactly as listed. " +
         `The user's timezone is ${tz}; right now it is ${localNow} there (${now.toISOString()} UTC). ` +
-        "due: if the text implies a deadline or reminder time, resolve it in the user's timezone " +
+        "due: if the subject or the forwarder's own note implies a deadline or reminder, resolve it in the user's timezone " +
         "(honor an explicit timezone if the text names one; default to 09:00 local when no time is given) " +
         "and output it as an ISO 8601 UTC datetime; else null. " +
-        "priority: true only for urgency markers (urgent, asap, '!!', a hard deadline today).",
+        "A document stamp in a subject (for example '25 Jul 2026 --') is not a deadline. " +
+        "Notes, ideas, links, and quotes get due null. " +
+        "If the message contains a line '----- forwarded content (context only) -----', " +
+        "everything after it is forwarded context: use it for type and tags only. " +
+        "Never take a due date, a reminder, urgency, or 'this is a task' from that section. " +
+        "If the text starts with task:, idea:, note:, link:, or quote:, that prefix forces the type. " +
+        "priority: true only for urgency markers in the subject or the forwarder's note (urgent, asap, '!!').",
       messages: [{ role: "user", content: text }],
     }),
   });
@@ -376,25 +410,56 @@ const RE_TASK = /\b(todo|to-do|remind me|need(s)? to|don'?t forget|must|buy|get|
 const RE_IDEA = /^(idea|concept)[:\s]|\b(what if|imagine|app (for|that|idea)|startup|business idea|feature idea|side project)\b/i;
 const RE_QUOTE = /^\s*["“].+["”]\s*([—–-].+)?$/s;
 const RE_PRI = /(!{2,}|\burgent(ly)?\b|\basap\b|\bimportant\b|\bcritical\b)/i;
+const RE_OVERRIDE = /^(task|idea|note|link|quote)\s*:\s*/i;
 
 const DAYS = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
+const MONTHS = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"];
 
-function regexClassify(text) {
-  const tags = [...text.matchAll(/#([\p{L}\p{N}_-]+)/gu)].map((m) => m[1].toLowerCase());
-  const due = parseWhen(text);
-  let type;
-  if (RE_QUOTE.test(text)) type = "quote";
-  else if (RE_URL.test(text) && text.replace(RE_URL, "").trim().length < 60) type = "link";
-  else if (RE_TASK.test(text) || (due && !RE_IDEA.test(text))) type = "task";
-  else if (RE_IDEA.test(text)) type = "idea";
-  else if (RE_URL.test(text)) type = "link";
-  else type = "note";
-  return { type, tags, due, priority: RE_PRI.test(text) };
+function intentText(text) {
+  let raw = String(text || "").replace(/\r\n/g, "\n");
+  raw = raw.split(/\n?-{2,}\s*forwarded message\b/i)[0];
+  raw = raw.split(/\n?-{5}\s*forwarded content\b/i)[0];
+  return (raw.split(/\n\s*\n/)[0] || "").trim().slice(0, 300);
 }
 
-function parseWhen(text) {
-  const now = new Date();
-  const lower = text.toLowerCase();
+function regexClassify(text, now = new Date()) {
+  let raw = String(text || "");
+  let type = null;
+  const ov = raw.match(RE_OVERRIDE);
+  if (ov) { type = ov[1].toLowerCase(); raw = raw.slice(ov[0].length).trim() || raw; }
+  const intent = intentText(raw);
+  const tags = [...String(text || "").matchAll(/#([\p{L}\p{N}_-]+)/gu)].map((m) => m[1].toLowerCase());
+  const due = parseWhen(intent, now);
+  const priority = RE_PRI.test(intent);
+  const rest = intent.replace(/https?:\/\/[^\s<]+/gi, " ").replace(/#[\p{L}\p{N}_-]+/gu, " ").trim();
+  if (!type) {
+    if (RE_QUOTE.test(intent) && intent.length < 500) type = "quote";
+    else if (RE_URL.test(intent) && rest.length < 60) type = "link";
+    else if (RE_TASK.test(intent) || (due && !RE_IDEA.test(intent))) type = "task";
+    else if (RE_IDEA.test(intent)) type = "idea";
+    else type = "note";
+  }
+  return { type, tags: [...new Set(tags)], due, priority };
+}
+
+// For email, deadlines and urgency come from the subject / forwarder note.
+// Claude may still choose type and tags from the forwarded body (a recipe, a topic).
+function applyEmailGuards(result, text, now = new Date()) {
+  const local = regexClassify(intentText(text), now);
+  const guarded = { ...result, tags: [...(result.tags || [])] };
+  guarded.due = local.due;
+  guarded.priority = local.priority;
+  const ov = intentText(text).match(RE_OVERRIDE);
+  if (ov) guarded.type = ov[1].toLowerCase();
+  else if (local.type === "task") guarded.type = "task";
+  else if (guarded.type === "task") guarded.type = local.type;
+  const tags = [...String(text || "").matchAll(/#([\p{L}\p{N}_-]+)/gu)].map((m) => m[1].toLowerCase());
+  guarded.tags = [...new Set([...(guarded.tags || []).map((t) => String(t).toLowerCase().replace(/^#/, "")), ...tags])];
+  return guarded;
+}
+
+function parseWhen(text, now = new Date()) {
+  const lower = String(text || "").toLowerCase();
   let d = null;
   const at = (date, h, m) => { const x = new Date(date); x.setUTCHours(h, m || 0, 0, 0); return x; };
 
@@ -402,10 +467,10 @@ function parseWhen(text) {
   if ((m = lower.match(/\bin (\d+) (minute|min|hour|hr|day|week)s?\b/))) {
     const n = +m[1];
     const x = new Date(now);
-    if (/min/.test(m[2])) x.setMinutes(x.getMinutes() + n);
-    else if (/h/.test(m[2])) x.setHours(x.getHours() + n);
-    else if (m[2] === "day") x.setDate(x.getDate() + n);
-    else x.setDate(x.getDate() + 7 * n);
+    if (/min/.test(m[2])) x.setUTCMinutes(x.getUTCMinutes() + n);
+    else if (/h/.test(m[2])) x.setUTCHours(x.getUTCHours() + n);
+    else if (m[2] === "day") x.setUTCDate(x.getUTCDate() + n);
+    else x.setUTCDate(x.getUTCDate() + 7 * n);
     d = x;
   } else if (/\btomorrow\b/.test(lower)) {
     const x = new Date(now); x.setUTCDate(x.getUTCDate() + 1); d = at(x, 9);
@@ -420,6 +485,15 @@ function parseWhen(text) {
     let delta = (target - now.getUTCDay() + 7) % 7;
     if (delta === 0) delta = 7;
     const x = new Date(now); x.setUTCDate(x.getUTCDate() + delta); d = at(x, 9);
+  } else if ((m = lower.match(/\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\.?\s+(\d{1,2})(?:st|nd|rd|th)?(?:(?:,\s*|\s+)(\d{4}))?\b/))) {
+    const mi = MONTHS.findIndex((mm) => mm.startsWith(m[1].replace(".", "").slice(0, 3)));
+    const year = m[3] ? +m[3] : now.getUTCFullYear();
+    const x = new Date(Date.UTC(year, mi, +m[2], 9, 0, 0, 0));
+    if (m[3] && x.getTime() < now.getTime() - 36 * 3600e3) { /* historical document date */ }
+    else {
+      if (!m[3] && x < now) x.setUTCFullYear(x.getUTCFullYear() + 1);
+      d = x;
+    }
   }
 
   if ((m = lower.match(/\b(?:at|by|@)\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b/)) && (m[3] || m[2])) {
@@ -432,3 +506,65 @@ function parseWhen(text) {
   }
   return d ? d.getTime() : null;
 }
+
+/* Needs attention — keep the windows in sync with the dashboard. */
+const DAY_MS = 24 * 60 * 60 * 1000;
+const OVERDUE_WINDOW_MS = 7 * DAY_MS;
+const URGENT_WINDOW_MS = 14 * DAY_MS;
+
+function dueMsOf(d) {
+  if (!d || d.due == null || d.due === "") return null;
+  const n = typeof d.due === "number" ? d.due : Date.parse(d.due);
+  return Number.isFinite(n) ? n : null;
+}
+function actionableDue(d) {
+  if (!d || d.type !== "task") return null;
+  const due = dueMsOf(d);
+  if (due == null) return null;
+  if (d.created && due < d.created - DAY_MS) return null;
+  return due;
+}
+function stillRelevant(d, now) {
+  const created = d.created || now;
+  if (now - created <= URGENT_WINDOW_MS) return true;
+  const due = actionableDue(d);
+  if (due == null) return false;
+  const delta = due - now;
+  return delta >= -OVERDUE_WINDOW_MS && delta <= OVERDUE_WINDOW_MS;
+}
+function needsAttention(d, now = Date.now()) {
+  if (!d || d.done || d.attentionDismissed) return false;
+  if (typeof d.snoozeUntil === "number" && d.snoozeUntil > now) return false;
+  if (typeof d.snoozeUntil === "number" && d.snoozeUntil <= now && now - d.snoozeUntil <= OVERDUE_WINDOW_MS) return true;
+  const due = actionableDue(d);
+  if (due != null) {
+    if (new Date(due).toDateString() === new Date(now).toDateString()) return true;
+    if (due < now && now - due <= OVERDUE_WINDOW_MS) return true;
+  }
+  if (d.priority && stillRelevant(d, now)) return true;
+  return false;
+}
+function compareAttention(a, b, now = Date.now()) {
+  const rank = (d) => {
+    const due = actionableDue(d);
+    if (due != null && new Date(due).toDateString() === new Date(now).toDateString()) return [0, due];
+    if (due != null && due < now && now - due <= OVERDUE_WINDOW_MS) return [1, now - due];
+    return [2, now - (d.created || 0)];
+  };
+  const ra = rank(a), rb = rank(b);
+  if (ra[0] !== rb[0]) return ra[0] - rb[0];
+  return ra[1] - rb[1];
+}
+function listLabel(d) {
+  const text = String(d.text || "").trim();
+  const url = text.match(/https?:\/\/\S+/);
+  const rest = text.replace(/https?:\/\/\S+/g, "").replace(/#\S+/g, "").trim();
+  if (url && !rest) {
+    try { return new URL(url[0].replace(/[),.;]+$/, "")).hostname.replace(/^www\./, ""); }
+    catch { return "link"; }
+  }
+  const line = text.split("\n")[0];
+  return line.length > 90 ? line.slice(0, 88).replace(/\s+\S*$/, "") + "…" : line;
+}
+
+export { intentText, regexClassify, parseWhen, applyEmailGuards, needsAttention, splitEmail, actionableDue };

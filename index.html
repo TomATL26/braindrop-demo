@@ -180,12 +180,13 @@ header {
 
 /* email/context section — the highlighted body of a captured email */
 .context {
+  display: none;
   margin-top: 8px; padding: 8px 10px;
   background: var(--type-wash, var(--wash-task)); border-left: 2px solid var(--type-c, var(--hairline));
   border-radius: 6px; font-size: 0.76rem; font-weight: 400; color: var(--ink-2);
   white-space: pre-wrap; word-wrap: break-word; overflow: hidden;
 }
-.context.collapsed { display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; }
+.context.open { display: block; }
 .ctx-toggle {
   background: none; border: none; color: var(--muted); font: inherit; font-size: 0.7rem;
   cursor: pointer; padding: 3px 0 0; display: block;
@@ -206,6 +207,7 @@ header {
 .due.later  { background: var(--wash-task); color: var(--c-task); }
 .due.today  { background: var(--wash-warning); color: var(--ink); }
 .due.over   { background: var(--wash-critical); color: var(--s-critical); }
+.due.stale  { background: transparent; color: var(--muted); font-weight: 600; }
 .due.done-badge { background: var(--wash-note); color: var(--s-good-text); }
 .pri { color: var(--s-critical); font-weight: 700; font-size: 0.66rem; }
 .card-actions { display: flex; flex-direction: column; gap: 2px; }
@@ -214,6 +216,15 @@ header {
   font-size: 0.8rem; padding: 2px 4px; border-radius: 6px;
 }
 .card-actions button:hover { color: var(--ink); background: var(--wash-task); }
+.act-row { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+.text-act {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 999px;
+  color: var(--ink-2); font: inherit; font-size: 0.66rem; font-weight: 650;
+  letter-spacing: 0; text-transform: none; padding: 4px 10px; cursor: pointer; line-height: 1.4;
+}
+.text-act:hover { border-color: var(--ink); color: var(--ink); }
+.group-h .text-act { flex: none; }
+.content a.title-link { word-break: normal; overflow-wrap: anywhere; }
 .edit-area { width: 100%; font: inherit; font-size: 0.85rem; color: var(--ink); background: var(--page);
   border: 1px solid var(--border); border-radius: 8px; padding: 8px; resize: vertical; }
 
@@ -235,8 +246,14 @@ footer { margin-top: 48px; text-align: center; font-size: 0.68rem; color: var(--
   background: var(--ink); color: var(--page); border-radius: 999px;
   padding: 8px 18px; font-size: 0.78rem; opacity: 0; pointer-events: none;
   transition: opacity 0.25s; z-index: 50; max-width: 90vw; text-align: center;
+  display: flex; gap: 10px; align-items: center;
 }
 .toast.show { opacity: 1; }
+.toast.undoable { pointer-events: auto; }
+.toast button {
+  background: transparent; color: inherit; border: 1px solid currentColor; border-radius: 999px;
+  font: inherit; font-size: 0.72rem; padding: 2px 8px; cursor: pointer;
+}
 </style>
 </head>
 <body>
@@ -290,7 +307,7 @@ footer { margin-top: 48px; text-align: center; font-size: 0.68rem; color: var(--
 <script>
 "use strict";
 /* ================= data ================= */
-const KEY = "braindrop.v1";
+const KEY = "braindrop.v1"; // stable key — upgrades must keep drops already in localStorage
 const TYPES = {
   task:  { icon: "✓",  label: "task"  },
   idea:  { icon: "💡", label: "idea"  },
@@ -354,9 +371,17 @@ const RE_OVERRIDE = /^(task|idea|note|link|quote)\s*:\s*/i;
 const DAYS = ["sunday","monday","tuesday","wednesday","thursday","friday","saturday"];
 const MONTHS = ["january","february","march","april","may","june","july","august","september","october","november","december"];
 
-function parseWhen(text) {
-  const now = new Date();
-  const lower = text.toLowerCase();
+// Dates and urgency are read from the capture itself — the subject, or the note
+// typed above a forward — not from a forwarded message or a long pasted body.
+function intentText(text) {
+  let raw = String(text || "").replace(/\r\n/g, "\n");
+  raw = raw.split(/\n?-{2,}\s*forwarded message\b/i)[0];
+  raw = raw.split(/\n?-{5}\s*forwarded content\b/i)[0];
+  return (raw.split(/\n\s*\n/)[0] || "").trim().slice(0, 300);
+}
+
+function parseWhen(text, now = new Date()) {
+  const lower = String(text || "").toLowerCase();
   let d = null, matched = null;
 
   const set = (base, label) => { d = base; matched = label; };
@@ -387,11 +412,16 @@ function parseWhen(text) {
     if (delta === 0) delta = 7;
     if (m[1]) delta = delta <= 7 ? delta + (delta < 7 ? 7 : 0) : delta;
     const x = new Date(now); x.setDate(x.getDate() + delta); set(at(x, 9), m[0]);
-  } else if ((m = lower.match(/\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\.? (\d{1,2})(st|nd|rd|th)?\b/))) {
+  } else if ((m = lower.match(/\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\.?\s+(\d{1,2})(?:st|nd|rd|th)?(?:(?:,\s*|\s+)(\d{4}))?\b/))) {
     const mi = MONTHS.findIndex(mm => mm.startsWith(m[1].replace(".", "").slice(0, 3)));
-    const x = new Date(now.getFullYear(), mi, +m[2], 9, 0, 0, 0);
-    if (x < now) x.setFullYear(x.getFullYear() + 1);
-    set(x, m[0]);
+    const year = m[3] ? +m[3] : now.getFullYear();
+    const x = new Date(year, mi, +m[2], 9, 0, 0, 0);
+    // An explicit year already in the past is a document date, not a reminder.
+    if (m[3] && x.getTime() < now.getTime() - 36 * 3600e3) { /* historical */ }
+    else {
+      if (!m[3] && x < now) x.setFullYear(x.getFullYear() + 1);
+      set(x, m[0]);
+    }
   }
 
   if ((m = lower.match(/\b(?:at|by|@)\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b/)) && (m[3] || m[2])) {
@@ -406,6 +436,17 @@ function parseWhen(text) {
   return d ? { due: d.getTime(), matched } : null;
 }
 
+function remainderWithoutUrls(text) {
+  return String(text || "")
+    .replace(/https?:\/\/[^\s<]+/gi, " ")
+    .replace(/#[\p{L}\p{N}_-]+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+function isMostlyUrl(text) {
+  return /https?:\/\//i.test(text) && remainderWithoutUrls(text).length < 60;
+}
+
 function classify(raw) {
   let text = raw.trim();
   let type = null;
@@ -414,15 +455,16 @@ function classify(raw) {
   if (ov) { type = ov[1].toLowerCase(); text = text.slice(ov[0].length).trim() || text; }
 
   const tags = [...text.matchAll(RE_TAG)].map(m => m[1].toLowerCase());
-  const when = parseWhen(text);
-  const priority = RE_PRI.test(text);
+  const intent = intentText(text);
+  const when = parseWhen(intent);
+  const priority = RE_PRI.test(intent);
 
   if (!type) {
-    if (RE_QUOTE.test(text)) type = "quote";
-    else if (RE_URL.test(text) && text.replace(RE_URL, "").trim().length < 60) type = "link";
-    else if (RE_TASK.test(text) || (when && !RE_IDEA.test(text))) type = "task";
-    else if (RE_IDEA.test(text)) type = "idea";
-    else if (RE_URL.test(text)) type = "link";
+    if (RE_QUOTE.test(text) && text.length < 500) type = "quote";
+    else if (isMostlyUrl(text)) type = "link";
+    else if (RE_TASK.test(intent) || (when && !RE_IDEA.test(intent))) type = "task";
+    else if (RE_IDEA.test(intent)) type = "idea";
+    else if (isMostlyUrl(intent)) type = "link";
     else type = "note";
   }
 
@@ -436,6 +478,205 @@ function classify(raw) {
     created: Date.now(),
     notified: false,
   };
+}
+
+/* ================= attention ================= */
+// Keep these windows in sync with worker/worker.js.
+const DAY = 86400000;
+const OVERDUE_WINDOW = 7 * DAY;   // "overdue" stays on the board for a week, then ages out
+const URGENT_WINDOW = 14 * DAY;   // a fresh urgent flag still counts after the due window
+
+function dueMs(d) {
+  if (!d || d.due == null || d.due === "") return null;
+  const n = typeof d.due === "number" ? d.due : Date.parse(d.due);
+  return Number.isFinite(n) ? n : null;
+}
+function sameDay(ts, now = new Date()) {
+  return new Date(ts).toDateString() === now.toDateString();
+}
+function isSnoozed(d, now = Date.now()) {
+  return typeof d.snoozeUntil === "number" && d.snoozeUntil > now;
+}
+// Only a task deadline counts. A date scraped from an old email — especially one
+// that already sat in the past when the drop was captured — is not a reminder.
+function actionableDue(d) {
+  if (!d || d.type !== "task") return null;
+  const due = dueMs(d);
+  if (due == null) return null;
+  if (d.created && due < d.created - DAY) return null;
+  return due;
+}
+function stillRelevant(d, now = Date.now()) {
+  const created = d.created || now;
+  if (now - created <= URGENT_WINDOW) return true;
+  const due = actionableDue(d);
+  if (due == null) return false;
+  const delta = due - now;
+  return delta >= -OVERDUE_WINDOW && delta <= OVERDUE_WINDOW;
+}
+function needsAttention(d, now = Date.now()) {
+  if (!d || d.done || d.attentionDismissed) return false;
+  if (isSnoozed(d, now)) return false;
+  // A snooze that just ended brings the drop back, even if the original date is old.
+  if (typeof d.snoozeUntil === "number" && d.snoozeUntil <= now && now - d.snoozeUntil <= OVERDUE_WINDOW) return true;
+  const due = actionableDue(d);
+  if (due != null) {
+    if (sameDay(due, new Date(now))) return true;
+    if (due < now && now - due <= OVERDUE_WINDOW) return true;
+  }
+  if (d.priority && stillRelevant(d, now)) return true;
+  return false;
+}
+function isDueToday(d, now = Date.now()) {
+  if (!d || d.done || d.attentionDismissed || isSnoozed(d, now)) return false;
+  const due = actionableDue(d);
+  return due != null && sameDay(due, new Date(now));
+}
+function isRecentlyOverdue(d, now = Date.now()) {
+  if (!d || d.done || d.attentionDismissed || isSnoozed(d, now)) return false;
+  const due = actionableDue(d);
+  if (due == null || sameDay(due, new Date(now))) return false;
+  return due < now && now - due <= OVERDUE_WINDOW;
+}
+function attentionRank(d, now = Date.now()) {
+  const due = actionableDue(d);
+  if (due != null && sameDay(due, new Date(now))) return [0, due];
+  if (due != null && due < now && now - due <= OVERDUE_WINDOW) return [1, now - due];
+  return [2, now - (d.created || 0)];
+}
+function actionMode(d, now = Date.now()) {
+  if (!d || d.done) return null;
+  if (d.attentionDismissed) return "restore";
+  if (needsAttention(d, now) || isSnoozed(d, now)) return "live";
+  const due = actionableDue(d);
+  if (due != null && due < now && !sameDay(due, new Date(now))) return "stale";
+  return null;
+}
+
+/* ================= titles ================= */
+function stripTrail(u) {
+  return String(u || "").replace(/[)\].,;:!?]+$/g, "");
+}
+function primaryUrl(text) {
+  const m = String(text || "").match(/https?:\/\/[^\s<]+/i);
+  return m ? stripTrail(m[0]) : null;
+}
+function urlOnly(text) {
+  if (!/https?:\/\//i.test(text || "")) return false;
+  return remainderWithoutUrls(text).replace(/[|·•,;:–—-]+/g, "").trim().length === 0;
+}
+function decodeSeg(s) {
+  try { return decodeURIComponent(s); }
+  catch { return s; }
+}
+const HOST_LABELS = {
+  "facebook.com": "Facebook",
+  "m.facebook.com": "Facebook",
+  "l.facebook.com": "Facebook",
+  "lm.facebook.com": "Facebook",
+  "fb.com": "Facebook",
+  "fb.watch": "Facebook",
+  "apple.news": "Apple News",
+  "youtu.be": "YouTube",
+  "youtube.com": "YouTube",
+  "m.youtube.com": "YouTube",
+  "music.youtube.com": "YouTube Music",
+  "open.spotify.com": "Spotify",
+  "spotify.com": "Spotify",
+  "twitter.com": "X",
+  "x.com": "X",
+  "instagram.com": "Instagram",
+  "reddit.com": "Reddit",
+  "news.ycombinator.com": "Hacker News",
+  "github.com": "GitHub",
+  "nytimes.com": "New York Times",
+  "wikipedia.org": "Wikipedia",
+  "en.wikipedia.org": "Wikipedia",
+};
+function hostLabel(host) {
+  const h = String(host || "").replace(/^www\./, "");
+  if (HOST_LABELS[h]) return HOST_LABELS[h];
+  const parts = h.split(".");
+  const name = parts.length > 2 ? parts[parts.length - 2] : parts[0];
+  return name ? name.charAt(0).toUpperCase() + name.slice(1) : "Link";
+}
+function readableSlug(seg) {
+  if (!seg || seg.length < 3) return false;
+  if (/^\d+$/.test(seg)) return false;
+  if (/^[A-Za-z0-9_-]{18,}$/.test(seg) && !/[-_]/.test(seg)) return false;
+  return /[a-zA-Z]/.test(seg);
+}
+function humanUrlTitle(urlStr) {
+  let u;
+  try { u = new URL(stripTrail(urlStr)); }
+  catch { return "Link"; }
+  const host = u.hostname.replace(/^www\./, "");
+  const parts = u.pathname.split("/").filter(Boolean).map(decodeSeg);
+  if (host === "fb.watch" || host === "fb.com" || host.endsWith("facebook.com")) {
+    if (parts.includes("reel") || parts.includes("reels")) return "Facebook reel";
+    if (host === "fb.watch" || parts.includes("watch") || parts.includes("videos") || parts.includes("video")) return "Facebook video";
+    if (parts.includes("posts") || parts.includes("share") || parts.includes("permalink")) return "Facebook post";
+    if (parts.includes("stories") || parts.includes("story")) return "Facebook story";
+    return "Facebook";
+  }
+  if (host === "apple.news" || host.endsWith(".apple.news")) return "Apple News";
+  if (host === "youtu.be" || host.endsWith("youtube.com")) return hostLabel(host);
+  const slug = [...parts].reverse().find(readableSlug);
+  if (slug) {
+    const words = slug.replace(/\.\w{1,5}$/, "").replace(/[-_]+/g, " ").replace(/\s+/g, " ").trim();
+    if (words.length >= 3 && words.length <= 70) return words.charAt(0).toUpperCase() + words.slice(1);
+  }
+  return hostLabel(host);
+}
+function shortenTitle(subject) {
+  let s = String(subject || "").replace(/\s+/g, " ").trim();
+  const original = s;
+  s = s.replace(/^(?:(?:re|fwd?|fw)\s*:\s*)+/i, "").trim();
+  const month = "(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)";
+  const dateToken = `(?:\\d{1,2}\\s+${month}\\.?\\s+\\d{2,4}|${month}\\.?\\s+\\d{1,2}(?:st|nd|rd|th)?(?:,?\\s+\\d{4})?|\\d{4}-\\d{2}-\\d{2}|\\d{1,2}[\\/\\-]\\d{1,2}[\\/\\-]\\d{2,4})`;
+  s = s.replace(/^(?:addendum|update|reminder|notice)\b\s*[:\-–—]\s*/i, "").trim();
+  s = s.replace(new RegExp(`^(?:addendum|update|reminder|notice)\\b\\s+(?=${dateToken})`, "i"), "").trim();
+  s = s.replace(new RegExp(`^${dateToken}\\s*[-–—|:]*\\s*`, "i"), "").trim();
+  s = s.replace(new RegExp(`\\s+${dateToken}\\s*[-–—|:]+\\s*`, "i"), " — ").trim();
+  s = s.replace(/^[-–—|:]\s*/, "").replace(/\s{2,}/g, " ").trim();
+  if (!s) s = original;
+  if (s.length > 88) {
+    const cut = s.slice(0, 86);
+    const tidy = cut.replace(/\s+\S*$/, "").replace(/[|,;:\-–—\s]+$/, "");
+    s = (tidy || cut).trim() + "…";
+  }
+  return s;
+}
+function emailish(d, text) {
+  return !!(d && (d.source === "email" || d.body)) || /^(?:re|fwd?|fw)\s*:/i.test(text) || /forwarded message/i.test(text);
+}
+function presentation(d) {
+  const text = String((d && d.text) || "").trim();
+  const url = primaryUrl(text);
+  if (url && urlOnly(text)) {
+    return { title: humanUrlTitle(url), href: url, extra: text, kind: "link" };
+  }
+  const asEmail = emailish(d, text);
+  const first = text.split(/\n/)[0].trim();
+  const rest = text.split(/\n/).slice(1).join("\n").trim();
+  const collapse = asEmail || first.length > 90 || (text.length > 180 && rest.length > 0);
+  // Short notes stay whole, including a second line. Only emails, raw links, and long pastes collapse.
+  if (!collapse) {
+    const extra = d && d.body ? d.body : "";
+    return { title: text, href: null, extra, kind: extra ? "email" : null };
+  }
+  const title = shortenTitle(first);
+  const parts = [];
+  if (title !== first && first) parts.push(first);
+  if (rest) parts.push(rest);
+  if (d && d.body && !text.includes(d.body)) parts.push(d.body);
+  const extra = parts.join("\n\n").trim();
+  const kind = asEmail || (d && d.body) ? "email" : (extra ? "more" : null);
+  return { title: title || first || text, href: null, extra, kind };
+}
+function allTags(d) {
+  const fromText = [...String(d.text || "").matchAll(/#([\p{L}\p{N}_-]+)/gu)].map(m => m[1].toLowerCase());
+  return [...new Set([...(d.tags || []).map(t => String(t).toLowerCase()), ...fromText])];
 }
 
 /* ================= rendering ================= */
@@ -471,48 +712,103 @@ function groupLabel(ts) {
   });
 }
 
-function dueInfo(d) {
-  if (!d.due) return null;
-  const now = new Date();
-  const due = new Date(d.due);
-  const sameDay = due.toDateString() === now.toDateString();
+function dueInfo(d, now = new Date()) {
+  const raw = dueMs(d);
+  if (raw == null) return null;
+  const nowMs = now.getTime();
+  const due = new Date(raw);
+  const today = sameDay(raw, now);
   const timeStr = due.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
   const dateStr = due.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
-  if (d.done) return { cls: "done-badge", label: `✓ was due ${sameDay ? timeStr : dateStr}` };
-  if (due < now) return { cls: "over", label: `⚠ overdue · ${sameDay ? timeStr : dateStr}` };
-  if (sameDay) return { cls: "today", label: `⏰ today ${timeStr}` };
+  if (isSnoozed(d, nowMs)) {
+    const until = new Date(d.snoozeUntil);
+    const u = until.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
+    return { cls: "later", label: `snoozed · ${u}` };
+  }
+  if (d.done && d.type === "task") return { cls: "done-badge", label: `✓ was due ${today ? timeStr : dateStr}` };
+  if (d.done) return null;
+  const actionable = actionableDue(d);
+  // Notes, ideas, links, and quotes can mention a date. They are never "overdue".
+  if (actionable == null) {
+    if (!today && raw < nowMs) return { cls: "stale", label: `📅 ${dateStr}` };
+    if (today) return { cls: "later", label: `📅 today ${timeStr}` };
+    return { cls: "later", label: `📅 ${dateStr} ${timeStr}` };
+  }
+  if (today) return { cls: "today", label: `⏰ today ${timeStr}` };
+  if (raw < nowMs) {
+    if (nowMs - raw <= OVERDUE_WINDOW) return { cls: "over", label: `⚠ overdue · ${dateStr}` };
+    return { cls: "stale", label: `past · ${dateStr}` };
+  }
   return { cls: "later", label: `📅 ${dateStr} ${timeStr}` };
 }
 
-function isDueToday(d) {
-  return d.due && !d.done && new Date(d.due).toDateString() === new Date().toDateString();
+const EXTRA_LABEL = {
+  email: ["▾ show full email", "▴ collapse"],
+  link: ["▾ show link", "▴ hide link"],
+  more: ["▾ show original", "▴ collapse"],
+};
+let snoozeFor = null;
+
+function snoozeUntilFromDays(days) {
+  const x = new Date();
+  x.setDate(x.getDate() + days);
+  x.setHours(9, 0, 0, 0);
+  return x.getTime();
 }
-function isOverdue(d) { return d.due && !d.done && d.due < Date.now(); }
+function patchFields(d, fields) {
+  Object.assign(d, fields);
+  save();
+  if (sync) remotePush(apiCall(`/api/drops/${d.id}`, { method: "PATCH", body: JSON.stringify(fields) }));
+}
 
 function card(d) {
   const t = TYPES[d.type] || TYPES.note;
   const due = dueInfo(d);
-  const isOpen = expanded.has(d.id);
+  const view = presentation(d);
+  const isOpen = expanded.has(d.id) && view.extra;
+  const mode = actionMode(d);
   const el = document.createElement("div");
   el.className = "card" + (d.done ? " done" : "");
   el.style.setProperty("--type-c", `var(--c-${d.type})`);
   el.style.setProperty("--type-wash", `var(--wash-${d.type})`);
+  const titleHtml = view.href
+    ? `<a class="title-link" href="${esc(view.href)}" target="_blank" rel="noopener">${esc(view.title)}</a>`
+    : fmtContent({ ...d, text: view.title });
+  const labels = view.kind ? EXTRA_LABEL[view.kind] : null;
+  const tags = allTags(d).filter(tag => !view.title.toLowerCase().includes("#" + tag));
+  let acts = "";
+  if (mode === "restore") {
+    acts = `<div class="act-row"><button type="button" class="text-act" data-act="restore">restore</button></div>`;
+  } else if (mode === "live" || mode === "stale") {
+    const snoozeOpen = snoozeFor === d.id;
+    const doneBtn = mode === "live" && d.type !== "task"
+      ? `<button type="button" class="text-act" data-act="complete">done</button>` : "";
+    const snoozeBtns = snoozeOpen
+      ? `<button type="button" class="text-act" data-act="snooze-for" data-days="1">tomorrow</button>
+         <button type="button" class="text-act" data-act="snooze-for" data-days="3">3 days</button>
+         <button type="button" class="text-act" data-act="snooze-for" data-days="7">next week</button>
+         <button type="button" class="text-act" data-act="snooze-cancel">cancel</button>`
+      : `<button type="button" class="text-act" data-act="snooze">${isSnoozed(d) ? "unsnooze" : "snooze"}</button>`;
+    acts = `<div class="act-row">${doneBtn}${snoozeBtns}
+      <button type="button" class="text-act" data-act="dismiss">dismiss</button></div>`;
+  }
   el.innerHTML = `
     ${d.type === "task" ? `<button class="checkbox" aria-label="Mark done" data-act="toggle">${d.done ? "✓" : ""}</button>` : ""}
     <div class="card-main">
       <div class="stamp">${stamp(d.created)}</div>
-      <div class="content">${fmtContent(d)}</div>
-      ${d.body ? `
-        <div class="context ${isOpen ? "" : "collapsed"}">${linkify(esc(d.body))}</div>
-        <button class="ctx-toggle" data-act="ctx">${isOpen ? "▴ collapse" : "▾ show full email"}</button>` : ""}
+      <div class="content">${titleHtml}</div>
+      ${view.extra ? `
+        <div class="context${isOpen ? " open" : ""}">${linkify(esc(view.extra))}</div>
+        <button class="ctx-toggle" data-act="ctx">${isOpen ? labels[1] : labels[0]}</button>` : ""}
       <div class="meta">
         <span class="badge">${t.icon} ${t.label}</span>
         ${d.priority && !d.done ? `<span class="pri">‼ urgent</span>` : ""}
         ${due ? `<span class="due ${due.cls}">${due.label}</span>` : ""}
         ${d.source === "telegram" ? `<span title="Captured via Telegram">✈</span>` : ""}
         ${d.source === "email" ? `<span title="Captured via email${d.emailFrom ? " from " + esc(d.emailFrom) : ""}">✉${d.emailFrom ? " " + esc(d.emailFrom.replace(/<.*$/, "").trim() || d.emailFrom) : ""}</span>` : ""}
-        ${(d.tags || []).filter(t2 => !d.text.toLowerCase().includes("#" + t2)).map(t2 => `<span class="tag">#${esc(t2)}</span>`).join(" ")}
+        ${tags.map(t2 => `<span class="tag">#${esc(t2)}</span>`).join(" ")}
       </div>
+      ${acts}
     </div>
     <div class="card-actions">
       <button data-act="edit" aria-label="Edit" title="Edit">✎</button>
@@ -525,14 +821,16 @@ function card(d) {
       render();
       return;
     }
-    const act = e.target.closest("[data-act]")?.dataset.act;
+    const actEl = e.target.closest("[data-act]");
+    const act = actEl?.dataset.act;
     if (!act) return;
     if (act === "ctx") {
       if (expanded.has(d.id)) expanded.delete(d.id); else expanded.add(d.id);
       render();
     }
-    if (act === "toggle") {
-      d.done = !d.done; save(); render();
+    if (act === "toggle" || act === "complete") {
+      d.done = act === "complete" ? true : !d.done;
+      save(); render();
       if (sync) remotePush(apiCall(`/api/drops/${d.id}`, { method: "PATCH", body: JSON.stringify({ done: d.done }) }));
     }
     if (act === "del") {
@@ -540,6 +838,42 @@ function card(d) {
       if (sync) remotePush(apiCall(`/api/drops/${d.id}`, { method: "DELETE" }));
     }
     if (act === "edit") startEdit(el, d);
+    if (act === "snooze") {
+      if (isSnoozed(d)) {
+        const prev = d.snoozeUntil;
+        patchFields(d, { snoozeUntil: null });
+        render();
+        toast("Back in needs attention", () => { patchFields(d, { snoozeUntil: prev }); render(); });
+      } else {
+        snoozeFor = snoozeFor === d.id ? null : d.id;
+        render();
+      }
+    }
+    if (act === "snooze-cancel") { snoozeFor = null; render(); }
+    if (act === "snooze-for") {
+      const days = +actEl.dataset.days;
+      const until = snoozeUntilFromDays(days);
+      const prev = d.snoozeUntil || null;
+      snoozeFor = null;
+      patchFields(d, { snoozeUntil: until });
+      render();
+      const when = new Date(until).toLocaleString(undefined, { weekday: "short", month: "short", day: "numeric", hour: "numeric" });
+      toast("Snoozed until " + when, () => { patchFields(d, { snoozeUntil: prev }); render(); });
+    }
+    if (act === "dismiss") {
+      patchFields(d, { attentionDismissed: true });
+      snoozeFor = null;
+      render();
+      toast("Dismissed from attention — text kept", () => {
+        patchFields(d, { attentionDismissed: false });
+        render();
+      });
+    }
+    if (act === "restore") {
+      patchFields(d, { attentionDismissed: false });
+      render();
+      toast("Restored to needs attention");
+    }
   });
   return el;
 }
@@ -556,9 +890,15 @@ function startEdit(el, d) {
       const re = classify(v);
       d.text = re.text; d.tags = re.tags;
       if (re.due) { d.due = re.due; d.dueLabel = re.dueLabel; d.notified = false; }
+      else { d.due = null; d.dueLabel = null; }
       d.priority = re.priority;
+      d.attentionDismissed = false;
+      d.snoozeUntil = null;
       save();
-      if (sync) remotePush(apiCall(`/api/drops/${d.id}`, { method: "PATCH", body: JSON.stringify({ text: v }) }).then(() => refreshRemote()));
+      if (sync) remotePush(apiCall(`/api/drops/${d.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ text: v, attentionDismissed: false, snoozeUntil: null }),
+      }).then(() => refreshRemote()));
     }
     render();
   };
@@ -578,14 +918,18 @@ function matches(d) {
   return true;
 }
 
+let stickScroll = true;
 function render() {
+  const y = stickScroll ? window.scrollY : 0;
   /* stats */
   const openTasks = drops.filter(d => d.type === "task" && !d.done);
-  const dueToday = drops.filter(isDueToday);
-  const overdue = drops.filter(isOverdue).filter(d => !isDueToday(d));
+  // Don't pass these straight to filter — it would feed the array index in as `now`.
+  const dueToday = drops.filter(d => isDueToday(d));
+  const overdue = drops.filter(d => isRecentlyOverdue(d));
   $("tOpen").textContent = openTasks.length;
   $("tDue").textContent = dueToday.length;
   $("tOver").textContent = overdue.length ? `+${overdue.length} overdue` : "";
+  $("tOver").title = overdue.length ? "Open tasks overdue within the last 7 days" : "";
   $("tIdeas").textContent = drops.filter(d => d.type === "idea").length;
   $("tAll").textContent = drops.length;
 
@@ -607,21 +951,37 @@ function render() {
     return;
   }
 
-  const addGroup = (label, items, cls) => {
+  const addGroup = (label, items, cls, action) => {
     const h = document.createElement("div");
     h.className = "group-h" + (cls ? " " + cls : "");
-    h.textContent = label;
+    const span = document.createElement("span");
+    span.textContent = label;
+    h.appendChild(span);
+    if (action) h.appendChild(action);
     list.appendChild(h);
     const c = document.createElement("div"); c.className = "cards";
     items.forEach(d => c.appendChild(card(d)));
     list.appendChild(c);
   };
 
-  const attention = visible.filter(d => isOverdue(d) || isDueToday(d));
+  const attention = visible.filter(d => needsAttention(d));
   const rest = visible.filter(d => !attention.includes(d));
 
   if (attention.length) {
-    addGroup("⚠ needs attention", [...attention].sort((a, b) => a.due - b.due), "attention");
+    let dismissBtn = null;
+    if (attention.length >= 2) {
+      dismissBtn = document.createElement("button");
+      dismissBtn.type = "button";
+      dismissBtn.className = "text-act";
+      dismissBtn.textContent = "dismiss all";
+      dismissBtn.addEventListener("click", () => dismissAttention(attention.map(d => d.id)));
+    }
+    const ranked = [...attention].sort((a, b) => {
+      const ra = attentionRank(a), rb = attentionRank(b);
+      if (ra[0] !== rb[0]) return ra[0] - rb[0];
+      return ra[1] - rb[1];
+    });
+    addGroup(`⚠ needs attention · ${attention.length}`, ranked, "attention", dismissBtn);
   }
   let currentLabel = null, bucket = [];
   const flush = () => { if (bucket.length) addGroup(currentLabel, bucket); bucket = []; };
@@ -631,6 +991,36 @@ function render() {
     bucket.push(d);
   }
   flush();
+  window.scrollTo(0, y);
+}
+
+function dismissAttention(ids) {
+  const set = new Set(ids);
+  const touched = [];
+  for (const d of drops) {
+    if (set.has(d.id) && needsAttention(d)) {
+      d.attentionDismissed = true;
+      touched.push(d.id);
+    }
+  }
+  if (!touched.length) return;
+  save();
+  if (sync) {
+    for (const id of touched) {
+      remotePush(apiCall(`/api/drops/${id}`, { method: "PATCH", body: JSON.stringify({ attentionDismissed: true }) }));
+    }
+  }
+  render();
+  toast(`Dismissed ${touched.length} from attention — text kept`, () => {
+    for (const d of drops) if (touched.includes(d.id)) d.attentionDismissed = false;
+    save();
+    if (sync) {
+      for (const id of touched) {
+        remotePush(apiCall(`/api/drops/${id}`, { method: "PATCH", body: JSON.stringify({ attentionDismissed: false }) }));
+      }
+    }
+    render();
+  });
 }
 
 /* ---------- filters ---------- */
@@ -663,7 +1053,9 @@ input.addEventListener("input", () => {
   if (!v) { hintRow.innerHTML = defaultHint; return; }
   const p = classify(v);
   const t = TYPES[p.type];
-  hintRow.innerHTML = `<span class="detect">filed as <b style="color:var(--c-${p.type})">${t.icon} ${t.label}</b></span>` +
+  const view = presentation(p);
+  const titled = view.title && view.title !== p.text ? ` · “${esc(view.title)}”` : "";
+  hintRow.innerHTML = `<span class="detect">filed as <b style="color:var(--c-${p.type})">${t.icon} ${t.label}</b>${titled}</span>` +
     (p.due ? `<span class="detect">⏰ <b>${new Date(p.due).toLocaleString(undefined, { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}</b></span>` : "") +
     (p.tags.length ? `<span class="detect">${p.tags.map(x => "#" + x).join(" ")}</span>` : "") +
     (p.priority ? `<span class="detect" style="color:var(--s-critical)">‼ urgent</span>` : "") +
@@ -682,7 +1074,9 @@ function submit() {
   save();
   input.value = ""; input.style.height = "auto";
   sendBtn.disabled = true; hintRow.innerHTML = defaultHint;
+  stickScroll = false;
   render();
+  stickScroll = true;
   toast(`${TYPES[d.type].icon} dropped as ${TYPES[d.type].label}${d.due ? " · reminder set" : ""}`);
   if (sync) {
     // Server classifies too (with Claude when configured) and becomes the source of truth.
@@ -696,11 +1090,30 @@ function submit() {
 
 /* ---------- toast ---------- */
 let toastTimer;
-function toast(msg) {
+let undoFn = null;
+function toast(msg, undo) {
   const t = $("toast");
-  t.textContent = msg; t.classList.add("show");
+  t.textContent = "";
+  t.classList.toggle("undoable", !!undo);
+  const span = document.createElement("span");
+  span.textContent = msg;
+  t.appendChild(span);
+  undoFn = undo || null;
+  if (undo) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.textContent = "undo";
+    b.addEventListener("click", () => {
+      const fn = undoFn;
+      undoFn = null;
+      t.classList.remove("show");
+      if (fn) fn();
+    });
+    t.appendChild(b);
+  }
+  t.classList.add("show");
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => t.classList.remove("show"), 2200);
+  toastTimer = setTimeout(() => { t.classList.remove("show"); undoFn = null; }, undo ? 5000 : 2200);
 }
 
 /* ---------- notifications ---------- */
@@ -714,8 +1127,11 @@ setInterval(() => {
   const now = Date.now();
   let changed = false;
   drops.forEach(d => {
-    if (d.due && !d.done && !d.notified && d.due <= now) {
-      new Notification("Braindrop reminder", { body: d.text });
+    const due = actionableDue(d);
+    // Only ping a deadline that just passed. Months-old email dues must not fire in a burst.
+    if (due && !d.done && !d.notified && !d.attentionDismissed && !isSnoozed(d) && due <= now && now - due < 6 * 3600e3) {
+      const view = presentation(d);
+      new Notification("Braindrop reminder", { body: view.title || d.text });
       d.notified = true; changed = true;
     }
   });
@@ -809,6 +1225,11 @@ if (sync) {
   setInterval(refreshRemote, 30000);
   $("syncBtn").textContent = "⇅ synced";
 }
+
+window.braindrop = {
+  classify, parseWhen, intentText, needsAttention, presentation,
+  shortenTitle, humanUrlTitle, actionableDue, isDueToday, isRecentlyOverdue, dueInfo,
+};
 </script>
 </body>
 </html>
