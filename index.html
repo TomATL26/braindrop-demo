@@ -206,6 +206,7 @@ header {
 .due.later  { background: var(--wash-task); color: var(--c-task); }
 .due.today  { background: var(--wash-warning); color: var(--ink); }
 .due.over   { background: var(--wash-critical); color: var(--s-critical); }
+.due.stale  { background: transparent; color: var(--muted); box-shadow: inset 0 0 0 1px var(--border); }
 .due.done-badge { background: var(--wash-note); color: var(--s-good-text); }
 .pri { color: var(--s-critical); font-weight: 700; font-size: 0.66rem; }
 .card-actions { display: flex; flex-direction: column; gap: 2px; }
@@ -216,6 +217,37 @@ header {
 .card-actions button:hover { color: var(--ink); background: var(--wash-task); }
 .edit-area { width: 100%; font: inherit; font-size: 0.85rem; color: var(--ink); background: var(--page);
   border: 1px solid var(--border); border-radius: 8px; padding: 8px; resize: vertical; }
+
+.link-desc { margin-top: 4px; font-size: 0.76rem; font-weight: 400; color: var(--ink-2); }
+.link-domain { margin-top: 2px; font-size: 0.68rem; color: var(--muted); letter-spacing: 0.02em; }
+.context.url.collapsed { -webkit-line-clamp: 1; }
+.attn-actions { display: inline-flex; gap: 8px; }
+.attn-actions button {
+  background: none; border: none; padding: 0; cursor: pointer;
+  font: inherit; font-size: 0.66rem; color: var(--muted); text-decoration: underline;
+}
+.attn-actions button:hover { color: var(--ink); }
+
+.stale-bar {
+  display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+  margin: 4px 0 14px; padding: 8px 12px;
+  border: 1px dashed var(--hairline); border-radius: 10px;
+  background: var(--surface); color: var(--ink-2); font-size: 0.75rem;
+}
+.stale-bar .stale-label { flex: 1; min-width: 180px; }
+.stale-bar button {
+  background: none; border: 1px solid var(--border); border-radius: 999px;
+  color: var(--ink-2); font: inherit; font-size: 0.68rem; padding: 2px 10px; cursor: pointer;
+}
+.stale-bar button:hover { border-color: var(--muted); color: var(--ink); }
+.stale-list { display: flex; flex-direction: column; gap: 6px; margin: -6px 0 14px; }
+.stale-row {
+  display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+  padding: 6px 10px; font-size: 0.75rem;
+}
+.stale-row .stale-title { font-weight: 650; flex: 1; min-width: 140px; }
+.group-h.archive { color: var(--muted); }
 
 /* ---------- empty state ---------- */
 .empty {
@@ -237,6 +269,10 @@ footer { margin-top: 48px; text-align: center; font-size: 0.68rem; color: var(--
   transition: opacity 0.25s; z-index: 50; max-width: 90vw; text-align: center;
 }
 .toast.show { opacity: 1; }
+.toast button {
+  margin-left: 10px; background: transparent; color: inherit; border: 1px solid currentColor;
+  border-radius: 999px; font: inherit; font-size: 0.72rem; padding: 1px 8px; cursor: pointer;
+}
 </style>
 </head>
 <body>
@@ -249,7 +285,7 @@ footer { margin-top: 48px; text-align: center; font-size: 0.68rem; color: var(--
     </div>
     <div class="toolbar">
       <button id="notifBtn" title="Get a browser notification when a task comes due">🔔 remind</button>
-      <button id="syncBtn" title="Connect a Braindrop worker to sync with Telegram &amp; email capture">⇅ sync</button>
+      <button id="syncBtn" title="Share this board through your worker so every device and Telegram use one list">⇅ sync</button>
       <button id="exportBtn">export</button>
       <button id="importBtn">import</button>
       <input type="file" id="importFile" accept=".json" hidden>
@@ -280,13 +316,14 @@ footer { margin-top: 48px; text-align: center; font-size: 0.68rem; color: var(--
   <div id="list"></div>
 
   <footer>
-    local-first: drops live in <em>your</em> browser · connect a sync worker (⇅) to capture from telegram &amp; email<br>
+    drops stay in this browser until ⇅ sync — then phone, iPad, and desktop share one list with Telegram<br>
     braindrop concept demo · plain html/css/js
   </footer>
 </div>
 
 <div class="toast" id="toast"></div>
 
+<script src="braindrop-logic.js"></script>
 <script>
 "use strict";
 /* ================= data ================= */
@@ -301,17 +338,30 @@ const TYPES = {
 let drops = load();
 let filter = "all";
 let query = "";
+let staleOpen = false;
 const expanded = new Set();
+const unfurlTried = new Set();
+const L = () => globalThis.BraindropLogic;
 
-function load() {
-  try { return JSON.parse(localStorage.getItem(KEY)) || []; }
+const TOMB_KEY = "braindrop.tombstones";
+
+function loadTombs() {
+  try { return JSON.parse(localStorage.getItem(TOMB_KEY)) || []; }
   catch { return []; }
+}
+function load() {
+  try {
+    const all = JSON.parse(localStorage.getItem(KEY)) || [];
+    const dead = new Set(loadTombs().map(t => t && t.id));
+    return Array.isArray(all) ? all.filter(d => d && d.id && !dead.has(d.id)) : [];
+  } catch { return []; }
 }
 function save() { localStorage.setItem(KEY, JSON.stringify(drops)); }
 
-/* ================= sync (optional worker backend) ================= */
+/* ================= sync (worker is the shared list) ================= */
 const SYNC_KEY = "braindrop.sync";
 let sync = null;
+let tombstones = loadTombs();
 try { sync = JSON.parse(localStorage.getItem(SYNC_KEY)); } catch { /* not configured */ }
 
 async function apiCall(path, options = {}) {
@@ -326,20 +376,114 @@ async function apiCall(path, options = {}) {
   return res.status === 204 ? null : res.json();
 }
 
-async function refreshRemote(silent = true) {
-  if (!sync) return;
+function rememberTomb(id) {
+  if (!id || tombstones.some(t => t.id === id)) return;
+  tombstones.push({ id, at: Date.now() });
+  if (tombstones.length > 5000) tombstones = tombstones.slice(-5000);
+  localStorage.setItem(TOMB_KEY, JSON.stringify(tombstones));
+}
+
+function mark(d) { d.updated = Date.now(); return d.updated; }
+
+function syncPayload(d) {
+  const copy = L().exportDrop(d);
+  if (!copy.updated) copy.updated = copy.doneAt || copy.created || Date.now();
+  return copy;
+}
+
+function needsUpload(local, remote) {
+  if (!remote) return true;
+  const lu = local.updated || 0;
+  const ru = remote.updated || 0;
+  if (lu > ru) return true;
+  if (ru > lu) return false;
+  if (!!local.done !== !!remote.done) return true;
+  if ((local.linkTitle || "") !== (remote.linkTitle || "") && local.linkTitle) return true;
+  if ((local.linkDescription || "") !== (remote.linkDescription || "") && local.linkDescription) return true;
+  if (!!local.attentionDismissed !== !!remote.attentionDismissed) return !!local.attentionDismissed;
+  if (local.snoozedUntil && local.snoozedUntil !== remote.snoozedUntil) return true;
+  if ((local.title || "") !== (remote.title || "") && local.title) return true;
+  return false;
+}
+
+function pickDrop(local, remote) {
+  if (!remote) return local;
+  if (!local) return remote;
+  const lu = local.updated || 0;
+  const ru = remote.updated || 0;
+  if (lu > ru) return { ...remote, ...local };
+  if (ru > lu) return remote;
+  if (local.done && !remote.done) return { ...remote, ...local };
+  if (local.linkTitle && !remote.linkTitle) return { ...remote, ...local };
+  return remote;
+}
+
+function mergeLists(local, remote, tombs) {
+  const dead = new Set((tombs || []).map(t => (t && typeof t === "object" ? t.id : t)));
+  const map = new Map();
+  for (const d of remote || []) if (d && d.id && !dead.has(d.id)) map.set(d.id, d);
+  for (const d of local || []) {
+    if (!d || !d.id || dead.has(d.id)) continue;
+    map.set(d.id, pickDrop(d, map.get(d.id)));
+  }
+  return [...map.values()].sort((a, b) => (b.created || 0) - (a.created || 0));
+}
+
+let reconciling = false;
+async function reconcile(silent = true) {
+  if (!sync || reconciling) return;
+  reconciling = true;
   try {
-    drops = await apiCall("/api/drops");
+    let state = await apiCall("/api/sync");
+    if (!state || !Array.isArray(state.drops)) throw new Error("sync error bad payload");
+    const remoteTombs = Array.isArray(state.tombstones) ? state.tombstones : [];
+    const tombs = tombstones.slice();
+    const seen = new Set(tombs.map(t => t.id));
+    for (const t of remoteTombs) {
+      if (t && t.id && !seen.has(t.id)) { tombs.push(t); seen.add(t.id); }
+    }
+    const remoteById = new Map(state.drops.map(d => [d.id, d]));
+    const upload = [];
+    for (const d of drops) {
+      if (!d || seen.has(d.id)) continue;
+      if (needsUpload(d, remoteById.get(d.id))) upload.push(syncPayload(d));
+    }
+    const remoteDead = new Set(remoteTombs.map(t => t.id));
+    const pushTombs = tombs.filter(t => t && t.id && !remoteDead.has(t.id)).map(t => t.id);
+    if (upload.length || pushTombs.length) {
+      state = await apiCall("/api/drops/import", {
+        method: "POST",
+        body: JSON.stringify({ drops: upload, tombstones: pushTombs }),
+      });
+      if (!state || !Array.isArray(state.drops)) throw new Error("sync error bad payload");
+    }
+    const nextTombs = Array.isArray(state.tombstones) ? state.tombstones : tombs;
+    drops = mergeLists(drops, state.drops, nextTombs);
+    tombstones = nextTombs.filter(t => t && t.id).slice(-5000);
+    localStorage.setItem(TOMB_KEY, JSON.stringify(tombstones));
     save();
     render();
   } catch (e) {
-    if (!silent) toast("⚠ Couldn't reach the sync worker");
+    if (!silent) toast("⚠ Couldn't reach the sync worker — local drops were kept");
+  } finally {
+    reconciling = false;
   }
 }
 
-// Fire-and-forget mutation; the optimistic local change already rendered.
 function remotePush(promise) {
-  promise.catch(() => toast("⚠ Sync failed — change is local only"));
+  promise.catch(() => toast("⚠ Sync failed — change is saved on this device"));
+}
+
+function pushPatch(d, patch) {
+  if (!sync) return;
+  const updated = mark(d);
+  const body = { ...patch, updated };
+  if (typeof d.done === "boolean") body.done = d.done;
+  if (d.doneAt) body.doneAt = d.doneAt;
+  remotePush(apiCall(`/api/drops/${d.id}`, { method: "PATCH", body: JSON.stringify(body) }).catch(err => {
+    if (/404/.test(String(err && err.message))) return reconcile(true);
+    throw err;
+  }));
 }
 
 /* ================= parser ================= */
@@ -414,16 +558,26 @@ function classify(raw) {
   if (ov) { type = ov[1].toLowerCase(); text = text.slice(ov[0].length).trim() || text; }
 
   const tags = [...text.matchAll(RE_TAG)].map(m => m[1].toLowerCase());
-  const when = parseWhen(text);
+  let when = parseWhen(text);
   const priority = RE_PRI.test(text);
 
+  // A date alone files a short typed reminder as a task ("dentist tomorrow").
+  // It must not turn a forwarded email or a long paste into a deadline.
+  const shortTyped = text.length <= 280 && !/forwarded message/i.test(text);
   if (!type) {
     if (RE_QUOTE.test(text)) type = "quote";
     else if (RE_URL.test(text) && text.replace(RE_URL, "").trim().length < 60) type = "link";
-    else if (RE_TASK.test(text) || (when && !RE_IDEA.test(text))) type = "task";
+    else if (RE_TASK.test(text) || (when && shortTyped && !RE_IDEA.test(text))) type = "task";
     else if (RE_IDEA.test(text)) type = "idea";
     else if (RE_URL.test(text)) type = "link";
     else type = "note";
+  }
+
+  // Notes, ideas, links, and quotes are not deadlines.
+  if (type !== "task") when = null;
+  else if (!shortTyped) {
+    // A date buried in a forwarded body is not a reminder. Only the first line counts.
+    when = parseWhen(text.split("\n")[0]);
   }
 
   return {
@@ -434,6 +588,7 @@ function classify(raw) {
     priority,
     done: false,
     created: Date.now(),
+    updated: Date.now(),
     notified: false,
   };
 }
@@ -471,47 +626,73 @@ function groupLabel(ts) {
   });
 }
 
-function dueInfo(d) {
-  if (!d.due) return null;
-  const now = new Date();
-  const due = new Date(d.due);
-  const sameDay = due.toDateString() === now.toDateString();
-  const timeStr = due.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
-  const dateStr = due.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
-  if (d.done) return { cls: "done-badge", label: `✓ was due ${sameDay ? timeStr : dateStr}` };
-  if (due < now) return { cls: "over", label: `⚠ overdue · ${sameDay ? timeStr : dateStr}` };
-  if (sameDay) return { cls: "today", label: `⏰ today ${timeStr}` };
-  return { cls: "later", label: `📅 ${dateStr} ${timeStr}` };
+function cardBody(d) {
+  const logic = L();
+  const isOpen = expanded.has(d.id);
+  if (d.type === "link") {
+    const info = logic.describeLink(d);
+    const chunks = [];
+    const raw = (d.text || "").trim();
+    if (raw && raw !== info.title) chunks.push(raw);
+    const body = logic.cleanEmailBody(d.body || "");
+    if (body && body !== raw) chunks.push(body);
+    const context = chunks.join("\n\n");
+    const label = body ? "email" : "link";
+    const clamp = body ? "" : "url";
+    return `
+      <div class="content">${esc(info.title)}</div>
+      ${info.description ? `<div class="link-desc">${esc(info.description)}</div>` : ""}
+      ${info.domain ? `<div class="link-domain">${esc(info.domain)}</div>` : ""}
+      ${context ? `
+        <div class="context ${clamp} ${isOpen ? "" : "collapsed"}">${linkify(esc(context))}</div>
+        <button class="ctx-toggle" data-act="ctx">${isOpen ? "▴ hide " + label : "▾ show " + label}</button>` : ""}`;
+  }
+  const title = logic.displayTitle(d);
+  const raw = (d.text || "").replace(/\s+/g, " ").trim();
+  const body = logic.cleanEmailBody(d.body || "");
+  const parts = [];
+  if (title !== raw) parts.push(d.text.trim());
+  if (body) parts.push(body);
+  const context = parts.join("\n\n");
+  const toggle = d.body ? "email" : "text";
+  return `
+    <div class="content">${fmtContent({ ...d, text: title })}</div>
+    ${context ? `
+      <div class="context ${isOpen ? "" : "collapsed"}">${linkify(esc(context))}</div>
+      <button class="ctx-toggle" data-act="ctx">${isOpen ? "▴ collapse" : "▾ show full " + toggle}</button>` : ""}`;
 }
 
-function isDueToday(d) {
-  return d.due && !d.done && new Date(d.due).toDateString() === new Date().toDateString();
+function attentionControls(d) {
+  if (d.done || d.attentionDismissed) return "";
+  if (!(L().needsAttention(d) || L().isStaleTask(d))) return "";
+  return `<span class="attn-actions">
+    <button type="button" data-act="snooze" data-days="7">snooze 7d</button>
+    <button type="button" data-act="dismiss">dismiss</button>
+  </span>`;
 }
-function isOverdue(d) { return d.due && !d.done && d.due < Date.now(); }
 
 function card(d) {
   const t = TYPES[d.type] || TYPES.note;
-  const due = dueInfo(d);
-  const isOpen = expanded.has(d.id);
+  const due = L().duePresentation(d);
   const el = document.createElement("div");
   el.className = "card" + (d.done ? " done" : "");
+  el.dataset.id = d.id;
   el.style.setProperty("--type-c", `var(--c-${d.type})`);
   el.style.setProperty("--type-wash", `var(--wash-${d.type})`);
+  const showTags = (d.tags || []).filter(t2 => d.type === "link" || !(d.text || "").toLowerCase().includes("#" + t2));
   el.innerHTML = `
-    ${d.type === "task" ? `<button class="checkbox" aria-label="Mark done" data-act="toggle">${d.done ? "✓" : ""}</button>` : ""}
+    ${d.type === "task" ? `<button class="checkbox" aria-label="${d.done ? "Restore to board" : "Archive task"}" title="${d.done ? "Restore" : "Archive"}" data-act="toggle">${d.done ? "✓" : ""}</button>` : ""}
     <div class="card-main">
       <div class="stamp">${stamp(d.created)}</div>
-      <div class="content">${fmtContent(d)}</div>
-      ${d.body ? `
-        <div class="context ${isOpen ? "" : "collapsed"}">${linkify(esc(d.body))}</div>
-        <button class="ctx-toggle" data-act="ctx">${isOpen ? "▴ collapse" : "▾ show full email"}</button>` : ""}
+      ${cardBody(d)}
       <div class="meta">
         <span class="badge">${t.icon} ${t.label}</span>
         ${d.priority && !d.done ? `<span class="pri">‼ urgent</span>` : ""}
         ${due ? `<span class="due ${due.cls}">${due.label}</span>` : ""}
         ${d.source === "telegram" ? `<span title="Captured via Telegram">✈</span>` : ""}
         ${d.source === "email" ? `<span title="Captured via email${d.emailFrom ? " from " + esc(d.emailFrom) : ""}">✉${d.emailFrom ? " " + esc(d.emailFrom.replace(/<.*$/, "").trim() || d.emailFrom) : ""}</span>` : ""}
-        ${(d.tags || []).filter(t2 => !d.text.toLowerCase().includes("#" + t2)).map(t2 => `<span class="tag">#${esc(t2)}</span>`).join(" ")}
+        ${showTags.map(t2 => `<span class="tag">#${esc(t2)}</span>`).join(" ")}
+        ${attentionControls(d)}
       </div>
     </div>
     <div class="card-actions">
@@ -525,23 +706,85 @@ function card(d) {
       render();
       return;
     }
-    const act = e.target.closest("[data-act]")?.dataset.act;
+    const actEl = e.target.closest("[data-act]");
+    const act = actEl?.dataset.act;
     if (!act) return;
     if (act === "ctx") {
       if (expanded.has(d.id)) expanded.delete(d.id); else expanded.add(d.id);
       render();
     }
-    if (act === "toggle") {
-      d.done = !d.done; save(); render();
-      if (sync) remotePush(apiCall(`/api/drops/${d.id}`, { method: "PATCH", body: JSON.stringify({ done: d.done }) }));
-    }
+    if (act === "toggle") toggleDone(d);
+    if (act === "snooze") snoozeDrop(d, +(actEl.dataset.days || 7));
+    if (act === "dismiss") dismissDrop(d);
     if (act === "del") {
+      rememberTomb(d.id);
       drops = drops.filter(x => x.id !== d.id); save(); render(); toast("Deleted");
-      if (sync) remotePush(apiCall(`/api/drops/${d.id}`, { method: "DELETE" }));
+      if (sync) remotePush(apiCall(`/api/drops/${d.id}`, { method: "DELETE" }).catch(err => {
+        if (/404/.test(String(err && err.message))) return;
+        throw err;
+      }));
     }
     if (act === "edit") startEdit(el, d);
   });
   return el;
+}
+
+function toggleDone(d) {
+  const next = !d.done;
+  d.done = next;
+  d.doneAt = next ? Date.now() : null;
+  mark(d);
+  save();
+  render();
+  pushPatch(d, { done: d.done, doneAt: d.doneAt });
+  if (next) {
+    toast("Archived", {
+      label: "undo",
+      run: () => {
+        d.done = false;
+        d.doneAt = null;
+        mark(d);
+        save();
+        render();
+        pushPatch(d, { done: false });
+      },
+    });
+  } else {
+    toast("Restored to the board");
+  }
+}
+
+function snoozeDrop(d, days) {
+  d.snoozedUntil = Date.now() + days * L().DAY;
+  mark(d);
+  save();
+  render();
+  pushPatch(d, { snoozedUntil: d.snoozedUntil });
+  toast(`Snoozed for ${days} day${days === 1 ? "" : "s"} — still on the board`);
+}
+
+function dismissDrop(d) {
+  d.attentionDismissed = true;
+  mark(d);
+  save();
+  render();
+  pushPatch(d, { attentionDismissed: true });
+  toast("Dismissed from Needs attention — the text stays");
+}
+
+function snoozeMany(items, days) {
+  const until = Date.now() + days * L().DAY;
+  items.forEach(d => { d.snoozedUntil = until; mark(d); pushPatch(d, { snoozedUntil: until }); });
+  save();
+  render();
+  toast(`Snoozed ${items.length} for ${days} days — nothing was deleted`);
+}
+
+function dismissMany(items) {
+  items.forEach(d => { d.attentionDismissed = true; mark(d); pushPatch(d, { attentionDismissed: true }); });
+  save();
+  render();
+  toast(`Cleared ${items.length} from Needs attention — the text stays on the board`);
 }
 
 function startEdit(el, d) {
@@ -556,9 +799,17 @@ function startEdit(el, d) {
       const re = classify(v);
       d.text = re.text; d.tags = re.tags;
       if (re.due) { d.due = re.due; d.dueLabel = re.dueLabel; d.notified = false; }
+      else { d.due = null; d.dueLabel = null; }
       d.priority = re.priority;
+      d.title = undefined;
+      d.linkTitle = undefined;
+      d.linkDescription = undefined;
+      d.linkDomain = undefined;
+      d.linkTitleSource = undefined;
+      d.attentionDismissed = false;
+      mark(d);
       save();
-      if (sync) remotePush(apiCall(`/api/drops/${d.id}`, { method: "PATCH", body: JSON.stringify({ text: v }) }).then(() => refreshRemote()));
+      if (sync) remotePush(apiCall(`/api/drops/${d.id}`, { method: "PATCH", body: JSON.stringify({ text: v, updated: d.updated }) }).then(() => reconcile()));
     }
     render();
   };
@@ -566,33 +817,55 @@ function startEdit(el, d) {
   ta.addEventListener("keydown", e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); ta.blur(); } });
 }
 
-function matches(d) {
-  if (filter === "done") { if (!d.done) return false; }
-  else if (d.done && filter !== "all") return false;
-  else if (filter !== "all" && filter !== "done" && d.type !== filter) return false;
-  if (query) {
-    const q = query.toLowerCase();
-    const hay = (d.text + " " + (d.body || "")).toLowerCase();
-    if (!hay.includes(q) && !(d.tags || []).some(t => ("#" + t).includes(q) || t.includes(q.replace(/^#/, "")))) return false;
+function typeOk(d) {
+  return filter === "all" || filter === "archive" || d.type === filter;
+}
+
+function stampDerived(d) {
+  const logic = L();
+  let changed = false;
+  if (d.type === "link") {
+    const info = logic.describeLink(d);
+    if (!logic.linkCaption(d.text) && (!d.linkTitle || logic.isJunkTitle(d.linkTitle)) && d.linkTitle !== info.title) {
+      d.linkTitle = info.title;
+      if (d.linkTitleSource !== "fetched") d.linkTitleSource = "heuristic";
+      changed = true;
+    }
+    if (info.domain && !d.linkDomain) {
+      d.linkDomain = info.domain;
+      changed = true;
+    }
+  } else if (logic.looksLikeEmail(d)) {
+    const title = logic.displayTitle(d);
+    const raw = String(d.text || "").replace(/\s+/g, " ").trim();
+    if (title && title !== raw && d.title !== title) { d.title = title; changed = true; }
   }
-  return true;
+  return changed;
 }
 
 function render() {
-  /* stats */
+  let stamped = false;
+  for (const d of drops) if (stampDerived(d)) { mark(d); stamped = true; }
+  if (stamped) {
+    save();
+    // Titles are derived on render. Push them after this turn so a reconcile
+    // that just finished can upload the new link titles and short subjects.
+    if (sync) queueMicrotask(() => reconcile(true));
+  }
+
+  const logic = L();
   const openTasks = drops.filter(d => d.type === "task" && !d.done);
-  const dueToday = drops.filter(isDueToday);
-  const overdue = drops.filter(isOverdue).filter(d => !isDueToday(d));
+  const attentionAll = drops.filter(d => logic.needsAttention(d));
+  const dueToday = attentionAll.filter(d => logic.isDueToday(d));
+  const overdue = attentionAll.filter(d => d.due && d.due < Date.now() && !logic.isDueToday(d));
   $("tOpen").textContent = openTasks.length;
   $("tDue").textContent = dueToday.length;
   $("tOver").textContent = overdue.length ? `+${overdue.length} overdue` : "";
-  $("tIdeas").textContent = drops.filter(d => d.type === "idea").length;
+  $("tIdeas").textContent = drops.filter(d => d.type === "idea" && !d.done).length;
   $("tAll").textContent = drops.length;
 
-  /* list */
   const list = $("list");
   list.innerHTML = "";
-  const visible = drops.filter(matches).sort((a, b) => b.created - a.created);
 
   if (!drops.length) {
     list.innerHTML = `<div class="empty">
@@ -600,10 +873,6 @@ function render() {
       <p><b>your brain has an inbox now.</b><br>type anything above — or load a few examples to see how it sorts.</p>
       <button id="seedBtn">show me with demo drops</button></div>`;
     $("seedBtn").addEventListener("click", seed);
-    return;
-  }
-  if (!visible.length) {
-    list.innerHTML = `<div class="empty"><p>nothing matches this filter.</p></div>`;
     return;
   }
 
@@ -617,12 +886,77 @@ function render() {
     list.appendChild(c);
   };
 
-  const attention = visible.filter(d => isOverdue(d) || isDueToday(d));
-  const rest = visible.filter(d => !attention.includes(d));
-
-  if (attention.length) {
-    addGroup("⚠ needs attention", [...attention].sort((a, b) => a.due - b.due), "attention");
+  if (filter === "archive") {
+    const archived = drops
+      .filter(d => d.done && logic.matchesQuery(d, query))
+      .sort((a, b) => (b.doneAt || b.created) - (a.doneAt || a.created));
+    if (!archived.length) {
+      list.innerHTML = `<div class="empty"><p>${query ? "nothing in the archive matches." : "Archive is empty. Checking off a task parks it here — the text stays searchable."}</p></div>`;
+      return;
+    }
+    addGroup("archive", archived, "archive");
+    return;
   }
+
+  let pool = drops.filter(d => !d.done && typeOk(d));
+  if (!query) pool = logic.foldEmailDupes(pool);
+  const matched = pool.filter(d => logic.matchesQuery(d, query)).sort((a, b) => b.created - a.created);
+
+  const attention = matched.filter(d => logic.needsAttention(d)).sort((a, b) => (a.due || Infinity) - (b.due || Infinity));
+  const attentionIds = new Set(attention.map(d => d.id));
+  const stale = matched.filter(d => logic.isStaleTask(d));
+  const rest = matched.filter(d => !attentionIds.has(d.id));
+
+  if (!matched.length && !(query && drops.some(d => d.done && typeOk(d) && logic.matchesQuery(d, query)))) {
+    const allOpenGone = drops.some(d => d.done) && !drops.some(d => !d.done);
+    list.innerHTML = `<div class="empty"><p>${
+      query ? "nothing matches this filter."
+      : allOpenGone ? "All caught up. Completed tasks are in Archive."
+      : "nothing matches this filter."
+    }</p></div>`;
+    return;
+  }
+
+  if (attention.length) addGroup("⚠ needs attention", attention, "attention");
+
+  if (stale.length) {
+    const bar = document.createElement("div");
+    bar.className = "stale-bar";
+    bar.innerHTML = `<span class="stale-label">${stale.length} older task${stale.length === 1 ? "" : "s"} ${stale.length === 1 ? "is" : "are"} past ${stale.length === 1 ? "its" : "their"} date${stale.length === 1 ? "" : "s"} — hidden from Needs attention</span>
+      <button type="button" data-bulk="toggle">${staleOpen ? "hide" : "show"}</button>
+      <button type="button" data-bulk="snooze">snooze 7 days</button>
+      <button type="button" data-bulk="dismiss">dismiss from attention</button>`;
+    bar.addEventListener("click", e => {
+      const bulk = e.target.closest("[data-bulk]")?.dataset.bulk;
+      if (bulk === "toggle") { staleOpen = !staleOpen; render(); }
+      if (bulk === "snooze") snoozeMany(stale, 7);
+      if (bulk === "dismiss") dismissMany(stale);
+    });
+    list.appendChild(bar);
+    if (staleOpen) {
+      const box = document.createElement("div");
+      box.className = "stale-list";
+      stale.sort((a, b) => a.due - b.due).forEach(d => {
+        const row = document.createElement("div");
+        row.className = "stale-row";
+        const due = logic.duePresentation(d);
+        row.innerHTML = `<span class="stale-title">${esc(logic.displayTitle(d))}</span>
+          ${due ? `<span class="due ${due.cls}">${due.label}</span>` : ""}
+          <span class="attn-actions">
+            <button type="button" data-act="snooze">snooze 7d</button>
+            <button type="button" data-act="dismiss">dismiss</button>
+          </span>`;
+        row.addEventListener("click", e => {
+          const act = e.target.closest("[data-act]")?.dataset.act;
+          if (act === "snooze") snoozeDrop(d, 7);
+          if (act === "dismiss") dismissDrop(d);
+        });
+        box.appendChild(row);
+      });
+      list.appendChild(box);
+    }
+  }
+
   let currentLabel = null, bucket = [];
   const flush = () => { if (bucket.length) addGroup(currentLabel, bucket); bucket = []; };
   for (const d of rest) {
@@ -631,12 +965,21 @@ function render() {
     bucket.push(d);
   }
   flush();
+
+  if (query) {
+    const archived = drops
+      .filter(d => d.done && typeOk(d) && logic.matchesQuery(d, query))
+      .sort((a, b) => (b.doneAt || b.created) - (a.doneAt || a.created));
+    if (archived.length) addGroup("in archive", archived, "archive");
+  }
+
+  queueMicrotask(enrichLinks);
 }
 
 /* ---------- filters ---------- */
 function buildFilters() {
   const bar = $("filters");
-  const defs = [["all", "all", null], ...Object.entries(TYPES).map(([k, v]) => [k, v.label + "s", k]), ["done", "done ✓", null]];
+  const defs = [["all", "all", null], ...Object.entries(TYPES).map(([k, v]) => [k, v.label + "s", k]), ["archive", "archive", null]];
   defs.reverse().forEach(([key, label, colorKey]) => {
     const b = document.createElement("button");
     b.className = "chip" + (filter === key ? " active" : "");
@@ -685,22 +1028,49 @@ function submit() {
   render();
   toast(`${TYPES[d.type].icon} dropped as ${TYPES[d.type].label}${d.due ? " · reminder set" : ""}`);
   if (sync) {
-    // Server classifies too (with Claude when configured) and becomes the source of truth.
-    remotePush(apiCall("/api/drops", { method: "POST", body: JSON.stringify({ text: v }) }).then(remote => {
-      drops = drops.filter(x => x.id !== d.id);
+    // Server classifies too (with Claude when configured). The id stays so an
+    // archive on this device still matches the shared copy.
+    remotePush(apiCall("/api/drops", { method: "POST", body: JSON.stringify({ text: v, id: d.id }) }).then(remote => {
+      const local = drops.find(x => x.id === d.id);
+      if (local && local.done) {
+        remote.done = true;
+        remote.doneAt = local.doneAt;
+        remote.updated = Math.max(remote.updated || 0, local.updated || 0);
+      }
+      if (local && local.linkTitle && !remote.linkTitle) {
+        remote.linkTitle = local.linkTitle;
+        remote.linkDescription = local.linkDescription;
+        remote.linkDomain = local.linkDomain;
+        remote.linkTitleSource = local.linkTitleSource;
+      }
+      drops = drops.filter(x => x.id !== d.id && x.id !== remote.id);
       drops.unshift(remote);
       save(); render();
+      if (remote.done) pushPatch(remote, { done: true, doneAt: remote.doneAt });
     }));
   }
 }
 
 /* ---------- toast ---------- */
 let toastTimer;
-function toast(msg) {
+function toast(msg, action) {
   const t = $("toast");
-  t.textContent = msg; t.classList.add("show");
+  t.replaceChildren();
+  t.append(document.createTextNode(msg));
+  if (action) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.textContent = action.label;
+    b.addEventListener("click", () => { t.classList.remove("show"); action.run(); });
+    t.appendChild(b);
+    t.classList.add("show");
+    t.style.pointerEvents = "auto";
+  } else {
+    t.style.pointerEvents = "none";
+  }
+  t.classList.add("show");
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => t.classList.remove("show"), 2200);
+  toastTimer = setTimeout(() => t.classList.remove("show"), action ? 4200 : 2200);
 }
 
 /* ---------- notifications ---------- */
@@ -714,8 +1084,9 @@ setInterval(() => {
   const now = Date.now();
   let changed = false;
   drops.forEach(d => {
-    if (d.due && !d.done && !d.notified && d.due <= now) {
-      new Notification("Braindrop reminder", { body: d.text });
+    if (d.due && !d.notified && d.due <= now && L().needsAttention(d)) {
+      const body = L().displayTitle(d) || d.text;
+      new Notification("Braindrop reminder", { body });
       d.notified = true; changed = true;
     }
   });
@@ -724,7 +1095,8 @@ setInterval(() => {
 
 /* ---------- export / import ---------- */
 $("exportBtn").addEventListener("click", () => {
-  const blob = new Blob([JSON.stringify(drops, null, 2)], { type: "application/json" });
+  const payload = drops.map(d => L().exportDrop(d));
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
   a.download = "braindrop-export.json";
@@ -767,6 +1139,8 @@ function seed() {
     }),
     mk("“The best way to predict the future is to invent it.” — Alan Kay", 8 * H),
     mk("https://developer.mozilla.org/en-US/docs/Web/API/Notification great reference for web notifications #dev", 26 * H),
+    mk("https://www.facebook.com/reel/1384349603876516/?fs=e", 90 * 60e3),
+    mk("Get the library book back #errands", 9 * D, { done: true, doneAt: now - D }),
     mk("Pay the water bill!! urgent", 30 * H, { due: now - 2 * H, dueLabel: "yesterday" }),
     mk("Pick up the dry cleaning today at 6pm #errands", 4 * H),
     mk("Gift ideas for Sam: vinyl records, that pour-over kettle, hiking socks #gifts", 2 * D),
@@ -780,33 +1154,120 @@ function seed() {
 /* ---------- sync setup ---------- */
 $("syncBtn").addEventListener("click", async () => {
   if (sync && !confirm("Sync is connected. Reconfigure it? (Cancel keeps the current connection)")) return;
-  const url = prompt("Worker URL (from `wrangler deploy` — see worker/README.md):", sync?.url || "https://braindrop-worker.YOU.workers.dev");
-  if (!url) { if (sync) { sync = null; localStorage.removeItem(SYNC_KEY); toast("Sync disconnected"); } return; }
-  const token = prompt("Dashboard token (the DASH_TOKEN secret):", sync?.token || "");
+  const previous = sync;
+  const url = prompt("Worker URL — use the same one on every device:", sync?.url || "https://braindrop-worker.YOU.workers.dev");
+  if (!url) {
+    if (sync) {
+      sync = null;
+      localStorage.removeItem(SYNC_KEY);
+      $("syncBtn").textContent = "⇅ sync";
+      toast("Sync disconnected — drops stay on this device");
+    }
+    return;
+  }
+  const token = prompt("Dashboard token (DASH_TOKEN) — the same secret on every device:", sync?.token || "");
   if (!token) return;
   sync = { url: url.trim(), token: token.trim() };
   try {
-    await apiCall("/api/drops");
+    const probe = await apiCall("/api/sync");
+    if (!probe || !Array.isArray(probe.drops)) {
+      sync = previous;
+      toast("⚠ That worker doesn't support shared sync yet. Deploy the latest worker. Local drops were kept.");
+      return;
+    }
     localStorage.setItem(SYNC_KEY, JSON.stringify(sync));
     $("syncBtn").textContent = "⇅ synced";
-    toast("⇅ Connected — Telegram & email drops will appear here");
-    refreshRemote(false);
+    startSyncLoop();
+    await reconcile(false);
+    toast("⇅ Connected — this browser's drops are on the shared list");
   } catch (e) {
-    sync = null;
+    sync = previous;
+    $("syncBtn").textContent = previous ? "⇅ synced" : "⇅ sync";
     const msg = /401/.test(e.message) ? "Worker reached, but it rejected the token (401) — the DASH_TOKEN doesn't match"
       : /sync error (\d+)/.test(e.message) ? "Worker error — " + e.message
-      : "Couldn't reach the worker at that URL — " + e.message;
+      : "Couldn't reach the worker at that URL — local drops were kept";
     toast("⚠ " + msg);
   }
 });
+
+let syncLoopStarted = false;
+function startSyncLoop() {
+  if (syncLoopStarted || !sync) return;
+  syncLoopStarted = true;
+  setInterval(() => reconcile(true), 20000);
+  window.addEventListener("focus", () => reconcile(true));
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") reconcile(true);
+  });
+}
+
+let enriching = false;
+async function clientUnfurl(url) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 4000);
+  try {
+    const res = await fetch(url, { credentials: "omit", signal: ctrl.signal });
+    const ctype = res.headers.get("content-type") || "";
+    if (!res.ok || !/text\/html|application\/xhtml/i.test(ctype)) return null;
+    const html = (await res.text()).slice(0, 250000);
+    return L().unfurlFromHtml(html, url);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function enrichLinks() {
+  if (enriching) return;
+  const logic = L();
+  const pending = drops.filter(d => {
+    if (d.type !== "link" || unfurlTried.has(d.id)) return false;
+    if (d.linkTitleSource === "fetched") return false;
+    if (logic.linkCaption(d.text)) return false;
+    return !!logic.firstUrl(d.text || "");
+  }).slice(0, 4);
+  if (!pending.length) return;
+  enriching = true;
+  let changed = false;
+  try {
+    for (const d of pending) {
+      unfurlTried.add(d.id);
+      const url = logic.firstUrl(d.text);
+      let meta = null;
+      try {
+        if (sync) {
+          try { meta = await apiCall("/api/unfurl?url=" + encodeURIComponent(url)); }
+          catch { meta = await clientUnfurl(url); }
+        } else {
+          meta = await clientUnfurl(url);
+        }
+      } catch { meta = null; }
+      if (!meta || !meta.title || logic.isJunkTitle(meta.title)) continue;
+      d.linkTitle = meta.title.slice(0, 180);
+      d.linkTitleSource = "fetched";
+      if (meta.description) d.linkDescription = String(meta.description).slice(0, 280);
+      if (meta.domain) d.linkDomain = meta.domain;
+      mark(d);
+      changed = true;
+      pushPatch(d, {
+        linkTitle: d.linkTitle,
+        linkDescription: d.linkDescription || "",
+        linkDomain: d.linkDomain || "",
+        linkTitleSource: "fetched",
+      });
+    }
+  } finally {
+    enriching = false;
+  }
+  if (changed) { save(); render(); }
+}
 
 /* ---------- init ---------- */
 buildFilters();
 render();
 setInterval(render, 60000);
 if (sync) {
-  refreshRemote();
-  setInterval(refreshRemote, 30000);
+  reconcile();
+  startSyncLoop();
   $("syncBtn").textContent = "⇅ synced";
 }
 </script>

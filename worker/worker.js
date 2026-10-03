@@ -4,10 +4,13 @@
  * Routes:
  *   POST  /telegram          Telegram bot webhook (secret-token verified)
  *   POST  /email?token=...   Inbound-email webhook (Postmark/Mailgun/SendGrid)
+ *   GET   /api/sync          {drops, tombstones}       (Bearer DASH_TOKEN)
  *   GET   /api/drops         List all drops            (Bearer DASH_TOKEN)
- *   POST  /api/drops         Add a drop  {text}        (Bearer DASH_TOKEN)
- *   PATCH /api/drops/:id     Update      {done|text}   (Bearer DASH_TOKEN)
- *   DELETE /api/drops/:id    Delete                    (Bearer DASH_TOKEN)
+ *   POST  /api/drops         Add a drop  {text, id?}   (Bearer DASH_TOKEN)
+ *   POST  /api/drops/import  Upsert drops + tombstones (Bearer DASH_TOKEN)
+ *   PATCH /api/drops/:id     Update done, text, snooze, dismiss, link preview
+ *   DELETE /api/drops/:id    Delete (tombstoned)       (Bearer DASH_TOKEN)
+ *   GET   /api/unfurl?url=   Fetch a page title + description (Bearer DASH_TOKEN)
  *
  * Also exports an `email()` handler for Cloudflare Email Routing, so a
  * forwarding address like drop@your-domain.com can deliver straight here.
@@ -23,7 +26,9 @@
 "use strict";
 
 const KV_KEY = "drops";
+const TOMB_KEY = "tombstones";
 const MAX_DROPS = 2000;
+const MAX_TOMBS = 5000;
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -38,6 +43,9 @@ export default {
       if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
       if (url.pathname === "/telegram" && request.method === "POST") return telegram(request, env);
       if (url.pathname === "/email" && request.method === "POST") return emailWebhook(request, env, url);
+      if (url.pathname === "/api/unfurl" && request.method === "GET") return unfurlRoute(request, env, url);
+      if (url.pathname === "/api/sync" && request.method === "GET") return syncState(request, env);
+      if (url.pathname === "/api/drops/import" && request.method === "POST") return importDrops(request, env);
       if (url.pathname.startsWith("/api/drops")) return api(request, env, url);
       return json({ ok: true, service: "braindrop" });
     } catch (err) {
@@ -67,6 +75,98 @@ async function loadDrops(env) {
 async function saveDrops(env, drops) {
   await env.DROPS.put(KV_KEY, JSON.stringify(drops.slice(0, MAX_DROPS)));
 }
+async function loadTombs(env) {
+  return (await env.DROPS.get(TOMB_KEY, "json")) || [];
+}
+async function saveTombs(env, tombs) {
+  await env.DROPS.put(TOMB_KEY, JSON.stringify(tombs.slice(-MAX_TOMBS)));
+}
+
+const DROP_TYPES = new Set(["task", "idea", "note", "link", "quote"]);
+const DROP_SOURCES = new Set(["web", "telegram", "email"]);
+
+/** Keep a client drop's identity, archive flag, and link preview. Reject junk. */
+export function sanitizeDrop(raw, now = Date.now()) {
+  if (!raw || typeof raw !== "object") return null;
+  const id = typeof raw.id === "string" ? raw.id.trim() : "";
+  const text = typeof raw.text === "string" ? raw.text.trim() : "";
+  if (!id || !/^[A-Za-z0-9_-]{1,80}$/.test(id) || !text) return null;
+  const drop = {
+    id,
+    text: text.slice(0, 20000),
+    type: DROP_TYPES.has(raw.type) ? raw.type : "note",
+    tags: Array.isArray(raw.tags)
+      ? raw.tags.slice(0, 24).map((t) => String(t).toLowerCase().replace(/^#/, "").slice(0, 40)).filter(Boolean)
+      : [],
+    due: typeof raw.due === "number" && Number.isFinite(raw.due) ? raw.due : null,
+    priority: !!raw.priority,
+    done: !!raw.done,
+    created: typeof raw.created === "number" && raw.created > 0 ? raw.created : now,
+    source: DROP_SOURCES.has(raw.source) ? raw.source : "web",
+    notified: !!raw.notified,
+    updated: typeof raw.updated === "number" && raw.updated > 0 ? raw.updated : now,
+  };
+  if (typeof raw.body === "string" && raw.body.trim()) drop.body = raw.body.slice(0, 20000);
+  if (typeof raw.emailFrom === "string" && raw.emailFrom.trim()) drop.emailFrom = raw.emailFrom.slice(0, 240);
+  if (typeof raw.title === "string" && raw.title.trim()) drop.title = raw.title.slice(0, 200);
+  if (typeof raw.dueLabel === "string" && raw.dueLabel.trim()) drop.dueLabel = raw.dueLabel.slice(0, 80);
+  if (typeof raw.linkTitle === "string" && raw.linkTitle.trim()) drop.linkTitle = raw.linkTitle.slice(0, 180);
+  if (typeof raw.linkDescription === "string" && raw.linkDescription.trim()) drop.linkDescription = raw.linkDescription.slice(0, 280);
+  if (typeof raw.linkDomain === "string" && raw.linkDomain.trim()) drop.linkDomain = raw.linkDomain.slice(0, 120);
+  if (raw.linkTitleSource === "fetched" || raw.linkTitleSource === "heuristic") drop.linkTitleSource = raw.linkTitleSource;
+  if (typeof raw.snoozedUntil === "number") drop.snoozedUntil = raw.snoozedUntil;
+  if (raw.attentionDismissed) drop.attentionDismissed = true;
+  if (drop.done && typeof raw.doneAt === "number") drop.doneAt = raw.doneAt;
+  return drop;
+}
+
+/**
+ * Merge an upload into the shared store.
+ * Inserts missing drops, keeps the newer copy when both sides have an id,
+ * and never deletes a drop unless its id is tombstoned.
+ */
+export function applyImport(drops, tombs, incomingDrops, incomingTombIds, now = Date.now()) {
+  const tombList = Array.isArray(tombs) ? tombs.filter((t) => t && typeof t.id === "string") : [];
+  const dead = new Set(tombList.map((t) => t.id));
+  for (const id of incomingTombIds || []) {
+    if (typeof id !== "string") continue;
+    const clean = id.trim().slice(0, 80);
+    if (!clean || dead.has(clean)) continue;
+    tombList.push({ id: clean, at: now });
+    dead.add(clean);
+  }
+  const kept = (Array.isArray(drops) ? drops : []).filter((d) => d && d.id && !dead.has(d.id));
+  for (const raw of incomingDrops || []) {
+    const drop = sanitizeDrop(raw, now);
+    if (!drop || dead.has(drop.id)) continue;
+    const idx = kept.findIndex((d) => d.id === drop.id);
+    if (idx < 0) kept.unshift(drop);
+    else if ((drop.updated || 0) >= (kept[idx].updated || 0)) kept[idx] = { ...kept[idx], ...drop };
+  }
+  kept.sort((a, b) => (b.created || 0) - (a.created || 0));
+  return { drops: kept.slice(0, MAX_DROPS), tombstones: tombList.slice(-MAX_TOMBS) };
+}
+
+function authorized(request, env) {
+  const auth = request.headers.get("Authorization") || "";
+  return !!(env.DASH_TOKEN && auth === `Bearer ${env.DASH_TOKEN}`);
+}
+
+async function syncState(request, env) {
+  if (!authorized(request, env)) return json({ error: "unauthorized" }, 401);
+  return json({ drops: await loadDrops(env), tombstones: await loadTombs(env) });
+}
+
+async function importDrops(request, env) {
+  if (!authorized(request, env)) return json({ error: "unauthorized" }, 401);
+  const body = await request.json().catch(() => ({}));
+  const incoming = Array.isArray(body.drops) ? body.drops.slice(0, 500) : [];
+  const tombsIn = Array.isArray(body.tombstones) ? body.tombstones.slice(0, 500) : [];
+  const result = applyImport(await loadDrops(env), await loadTombs(env), incoming, tombsIn);
+  await saveDrops(env, result.drops);
+  await saveTombs(env, result.tombstones);
+  return json(result);
+}
 
 /* ---------------- dashboard API ---------------- */
 
@@ -82,9 +182,13 @@ async function api(request, env, url) {
   if (request.method === "GET") return json(drops);
 
   if (request.method === "POST") {
-    const { text } = await request.json();
-    if (!text || !text.trim()) return json({ error: "text required" }, 400);
-    const drop = await classify(text.trim(), env, "web");
+    const payload = await request.json();
+    const text = payload && payload.text;
+    if (!text || !String(text).trim()) return json({ error: "text required" }, 400);
+    const drop = await classify(String(text).trim(), env, "web");
+    if (typeof payload.id === "string" && /^[A-Za-z0-9_-]{1,80}$/.test(payload.id) && !drops.some((d) => d.id === payload.id)) {
+      drop.id = payload.id;
+    }
     drops.unshift(drop);
     await saveDrops(env, drops);
     return json(drop, 201);
@@ -95,19 +199,45 @@ async function api(request, env, url) {
 
   if (request.method === "PATCH") {
     const patch = await request.json();
-    if (typeof patch.done === "boolean") drops[idx].done = patch.done;
+    if (typeof patch.done === "boolean") {
+      drops[idx].done = patch.done;
+      if (patch.done) drops[idx].doneAt = typeof patch.doneAt === "number" ? patch.doneAt : (drops[idx].doneAt || Date.now());
+      else delete drops[idx].doneAt;
+    }
+    if (patch.snoozedUntil === null) delete drops[idx].snoozedUntil;
+    else if (typeof patch.snoozedUntil === "number") drops[idx].snoozedUntil = patch.snoozedUntil;
+    if (typeof patch.attentionDismissed === "boolean") drops[idx].attentionDismissed = patch.attentionDismissed;
+    if (typeof patch.linkTitle === "string") drops[idx].linkTitle = patch.linkTitle.slice(0, 180);
+    if (typeof patch.linkDescription === "string") drops[idx].linkDescription = patch.linkDescription.slice(0, 280);
+    if (typeof patch.linkDomain === "string") drops[idx].linkDomain = patch.linkDomain.slice(0, 120);
+    if (patch.linkTitleSource === "fetched" || patch.linkTitleSource === "heuristic") drops[idx].linkTitleSource = patch.linkTitleSource;
+    if (typeof patch.title === "string") drops[idx].title = patch.title.slice(0, 200);
+    drops[idx].updated = typeof patch.updated === "number" ? patch.updated : Date.now();
     if (typeof patch.text === "string" && patch.text.trim()) {
       const prev = drops[idx];
       const re = await classify(patch.text.trim(), env, prev.source);
-      drops[idx] = { ...re, id: prev.id, created: prev.created, done: prev.done, body: prev.body, emailFrom: prev.emailFrom };
+      drops[idx] = {
+        ...re,
+        id: prev.id,
+        created: prev.created,
+        updated: prev.updated,
+        done: prev.done,
+        doneAt: prev.doneAt,
+        body: prev.body,
+        emailFrom: prev.emailFrom,
+        snoozedUntil: prev.snoozedUntil,
+        attentionDismissed: false,
+        source: prev.source,
+      };
     }
     await saveDrops(env, drops);
     return json(drops[idx]);
   }
 
   if (request.method === "DELETE") {
-    drops.splice(idx, 1);
-    await saveDrops(env, drops);
+    const result = applyImport(drops, await loadTombs(env), [], [id]);
+    await saveDrops(env, result.drops);
+    await saveTombs(env, result.tombstones);
     return json({ ok: true });
   }
 
@@ -139,12 +269,11 @@ async function telegram(request, env) {
     const drops = await loadDrops(env);
     const now = Date.now();
     const attention = drops
-      .filter((d) => d.due && !d.done)
-      .filter((d) => d.due < now || new Date(d.due).toDateString() === new Date(now).toDateString())
-      .sort((a, b) => a.due - b.due);
+      .filter((d) => needsAttention(d, now))
+      .sort((a, b) => (a.due || Infinity) - (b.due || Infinity));
     await reply(env, msg.chat.id, attention.length
-      ? "⚠ Needs attention:\n" + attention.map((d) => `• ${d.text}`).join("\n")
-      : "Nothing overdue or due today. 🎉");
+      ? "⚠ Needs attention:\n" + attention.map((d) => `• ${briefLabel(d)}`).join("\n")
+      : "Nothing due today or newly overdue. 🎉");
     return json({ ok: true });
   }
 
@@ -169,11 +298,17 @@ async function telegram(request, env) {
 }
 
 async function reply(env, chatId, text) {
-  await fetch(`https://api.telegram.org/bot${env.TELEGRAM_TOKEN}/sendMessage`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ chat_id: chatId, text }),
-  });
+  try {
+    await fetch(`https://api.telegram.org/bot${env.TELEGRAM_TOKEN}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chat_id: chatId, text }),
+    });
+  } catch (e) {
+    // The drop is already stored. A failed reply must not make Telegram retry
+    // the webhook and file a second copy.
+    console.log("telegram reply failed:", e.message);
+  }
 }
 
 /* ---------------- email ingestion ---------------- */
@@ -208,16 +343,24 @@ async function emailWebhook(request, env, url) {
 
 async function captureEmail(env, from, subject, body) {
   const cleanSubject = (subject || "").replace(/^((re|fwd?|fw)\s*:\s*)+/i, "").trim();
-  const cleanBody = extractEmailContent(body || "");
+  const cleanBody = cleanEmailNoise(extractEmailContent(body || ""));
   if (!cleanSubject && !cleanBody) return null;
 
   // Classify on subject + a slice of body, but keep them separate for display:
   // the subject is the card title, the body is the expandable context section.
+  // Dates that only appear in the forwarded body are not deadlines — they used
+  // to pin months-old mail in Needs attention forever.
   const drop = await classify(
     [cleanSubject, cleanBody.slice(0, 1500)].filter(Boolean).join("\n"), env, "email");
-  drop.text = cleanSubject || cleanBody.split("\n")[0].slice(0, 120);
+  const firstLine = cleanBody.split("\n").find((line) => line.trim()) || "";
+  drop.text = cleanSubject || firstLine.slice(0, 140);
   drop.body = cleanBody || undefined;
   drop.emailFrom = from || undefined;
+  const title = shortTitle(drop.text);
+  if (title && title !== drop.text) drop.title = title;
+  if (drop.type !== "task") drop.due = null;
+  else drop.due = subjectDeadline(cleanSubject);
+  if (!RE_PRI.test(cleanSubject || "")) drop.priority = false;
   const drops = await loadDrops(env);
   drops.unshift(drop);
   await saveDrops(env, drops);
@@ -291,6 +434,8 @@ async function classify(text, env, source) {
     }
   }
   if (!result) result = regexClassify(text);
+  // A date inside a note, idea, link, or quote is context, not a deadline.
+  if (result.type !== "task") result.due = null;
 
   return {
     id: crypto.randomUUID().slice(0, 12),
@@ -301,6 +446,7 @@ async function classify(text, env, source) {
     priority: result.priority,
     done: false,
     created: Date.now(),
+    updated: Date.now(),
     source,
     notified: false,
   };
@@ -350,10 +496,13 @@ async function claudeClassify(text, env) {
         "When a drop belongs to a collection (e.g. a recipe, a link to one, or a dish to try), " +
         "put that collection name FIRST in tags, spelled exactly as listed. " +
         `The user's timezone is ${tz}; right now it is ${localNow} there (${now.toISOString()} UTC). ` +
-        "due: if the text implies a deadline or reminder time, resolve it in the user's timezone " +
+        "due: only for tasks, and only when the user's own words commit to a time. " +
+        "Dates inside forwarded emails, newsletters, receipts, and past events are not deadlines — use null. " +
+        "Never set due on notes, ideas, links, or quotes. Resolve a real deadline in the user's timezone " +
         "(honor an explicit timezone if the text names one; default to 09:00 local when no time is given) " +
         "and output it as an ISO 8601 UTC datetime; else null. " +
-        "priority: true only for urgency markers (urgent, asap, '!!', a hard deadline today).",
+        "priority: true only when the user's own words are urgent (urgent, asap, '!!', a hard deadline today), " +
+        "not when a forwarded thread mentions urgency about something already past.",
       messages: [{ role: "user", content: text }],
     }),
   });
@@ -392,8 +541,16 @@ function regexClassify(text) {
   return { type, tags, due, priority: RE_PRI.test(text) };
 }
 
-function parseWhen(text) {
-  const now = new Date();
+const MONTHS = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"];
+const MON = "(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)";
+
+function monthIndex(token) {
+  const s = String(token || "").toLowerCase().replace(".", "").slice(0, 3);
+  return MONTHS.findIndex((mm) => mm.startsWith(s));
+}
+
+function parseWhen(text, nowMs = Date.now()) {
+  const now = new Date(nowMs);
   const lower = text.toLowerCase();
   let d = null;
   const at = (date, h, m) => { const x = new Date(date); x.setUTCHours(h, m || 0, 0, 0); return x; };
@@ -420,6 +577,11 @@ function parseWhen(text) {
     let delta = (target - now.getUTCDay() + 7) % 7;
     if (delta === 0) delta = 7;
     const x = new Date(now); x.setUTCDate(x.getUTCDate() + delta); d = at(x, 9);
+  } else if ((m = lower.match(new RegExp("\\b" + MON + "\\.?\\s+(\\d{1,2})(?:st|nd|rd|th)?\\b")))) {
+    const mi = monthIndex(m[1]);
+    const x = new Date(Date.UTC(now.getUTCFullYear(), mi, +m[2], 15, 0, 0));
+    if (x < now) x.setUTCFullYear(x.getUTCFullYear() + 1);
+    d = x;
   }
 
   if ((m = lower.match(/\b(?:at|by|@)\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b/)) && (m[3] || m[2])) {
@@ -432,3 +594,194 @@ function parseWhen(text) {
   }
   return d ? d.getTime() : null;
 }
+
+/* Attention + email cleaning. Dashboard copy lives in braindrop-logic.js. */
+const ATTENTION_WINDOW_MS = 14 * 24 * 60 * 60 * 1000;
+
+function isDueToday(d, now) {
+  if (!d || d.type !== "task" || !d.due || d.done) return false;
+  return new Date(d.due).toDateString() === new Date(now).toDateString();
+}
+
+function needsAttention(d, now = Date.now()) {
+  if (!d || d.done || d.attentionDismissed) return false;
+  if (d.snoozedUntil && d.snoozedUntil > now) return false;
+  if (d.type !== "task") {
+    return !!(d.priority && !d.due && now - (d.created || 0) <= ATTENTION_WINDOW_MS);
+  }
+  if (isDueToday(d, now)) return true;
+  if (d.due && d.due < now && now - d.due <= ATTENTION_WINDOW_MS) return true;
+  if (d.priority && d.due && Math.abs(d.due - now) <= ATTENTION_WINDOW_MS) return true;
+  if (d.priority && !d.due && now - (d.created || 0) <= ATTENTION_WINDOW_MS) return true;
+  return false;
+}
+
+function briefLabel(d) {
+  if (d.title && !/^https?:\/\//i.test(d.title)) return String(d.title).split("\n")[0].slice(0, 140);
+  if (d.linkTitle && !/^https?:\/\//i.test(d.linkTitle)) return String(d.linkTitle).slice(0, 140);
+  const line = String(d.text || "").split("\n")[0].trim();
+  if (/^https?:\/\//i.test(line)) {
+    try { return new URL(line.split(/\s/)[0]).hostname.replace(/^www\./, ""); }
+    catch { /* keep the line */ }
+  }
+  return line.slice(0, 140);
+}
+
+function shortTitle(text) {
+  let t = String(text || "").replace(/\s+/g, " ").trim();
+  t = t.replace(/^(?:(?:re|fwd?|fw)\s*:\s*)+/i, "");
+  t = t.replace(
+    /^(addendum|update|reminder)\s+\d{1,2}\s+[A-Za-z]{3,12}\s+\d{2,4}\s*[—–\-|:]+\s*/i,
+    (_, w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase() + " — "
+  );
+  t = t.replace(/\b\d{1,2}\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\s+\d{4}\b/gi, " ");
+  t = t.replace(/\s*[—–]{1,}\s*/g, " — ");
+  t = t.replace(/\s{2,}/g, " ").replace(/\s+—\s*$/g, "").replace(/^[\s—–\-|:]+/, "").trim();
+  if (t.length > 92) {
+    const cut = t.slice(0, 92);
+    const pivot = Math.max(cut.lastIndexOf(" — "), cut.lastIndexOf("; "), cut.lastIndexOf(", "), cut.lastIndexOf(" "));
+    t = (pivot > 36 ? cut.slice(0, pivot) : cut).trim().replace(/[,\s—–\-|:]+$/g, "") + "…";
+  }
+  return t;
+}
+
+function isImageFilename(t) {
+  const name = t.replace(/^<|>$/g, "");
+  if (!/\.(png|jpe?g|gif|webp|heic)$/i.test(name)) return false;
+  return /\d{5,}/.test(name) || name.length > 40;
+}
+
+function cleanEmailNoise(body) {
+  if (!body) return "";
+  const lines = String(body).replace(/\r\n/g, "\n").split("\n");
+  const kept = [];
+  for (const line of lines) {
+    const t = line.trim();
+    if (/^sent from my (iphone|ipad|ipod|mobile)/i.test(t)) continue;
+    if (/^sent from mail(\s+for\s+windows)?$/i.test(t)) continue;
+    if (/^get outlook for (ios|android|mac)$/i.test(t)) continue;
+    if (/^\[image:?\s*.*\]$/i.test(t)) continue;
+    if (/^\[cid:.*\]$/i.test(t)) continue;
+    if (isImageFilename(t)) continue;
+    if (/^-{2,}\s*forwarded message\s*-{2,}$/i.test(t)) continue;
+    if (/^begin forwarded message:?$/i.test(t)) continue;
+    kept.push(line);
+  }
+  return kept.join("\n").replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
+function buildUtcDate(day, month, year, nowMs) {
+  if (month < 0 || day < 1 || day > 31) return null;
+  const y = year || new Date(nowMs).getUTCFullYear();
+  const x = new Date(Date.UTC(y, month, day, 15, 0, 0));
+  if (x.getUTCMonth() !== month || x.getUTCDate() !== day) return null;
+  return x.getTime();
+}
+
+/** Absolute date in a subject, with no year-rollover. Historical mail stays in the past. */
+function parseAbsoluteDate(text, nowMs = Date.now()) {
+  const lower = String(text || "").toLowerCase();
+  let m;
+  if ((m = lower.match(new RegExp("\\b(\\d{1,2})(?:st|nd|rd|th)?\\s+" + MON + "(?:\\.?\\s+(\\d{4}))?\\b")))) {
+    return buildUtcDate(+m[1], monthIndex(m[2]), m[3] ? +m[3] : null, nowMs);
+  }
+  if ((m = lower.match(new RegExp("\\b" + MON + "\\.?\\s+(\\d{1,2})(?:st|nd|rd|th)?(?:\\s*,?\\s*(\\d{4}))?\\b")))) {
+    return buildUtcDate(+m[2], monthIndex(m[1]), m[3] ? +m[3] : null, nowMs);
+  }
+  return null;
+}
+
+function subjectDeadline(subject, nowMs = Date.now()) {
+  if (!subject) return null;
+  const abs = parseAbsoluteDate(subject, nowMs);
+  if (abs) return abs < nowMs - ATTENTION_WINDOW_MS ? null : abs;
+  const rel = parseWhen(subject, nowMs);
+  if (!rel) return null;
+  if (rel < nowMs - ATTENTION_WINDOW_MS) return null;
+  return rel;
+}
+
+function isPublicHttpUrl(str) {
+  let u;
+  try { u = new URL(str); } catch { return false; }
+  if (u.username || u.password) return false;
+  if (u.protocol !== "http:" && u.protocol !== "https:") return false;
+  const h = u.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  if (!h || h === "localhost" || h.endsWith(".local") || h.endsWith(".internal") || h === "0.0.0.0" || h === "::1") return false;
+  if (/^(127\.|10\.|192\.168\.|169\.254\.|0\.|172\.(1[6-9]|2\d|3[0-1])\.)/.test(h)) return false;
+  if (/^\d+$/.test(h)) return false;
+  return true;
+}
+
+function isJunkTitle(title) {
+  const t = String(title || "").trim().toLowerCase();
+  if (!t || t.length < 3) return true;
+  if (/^https?:\/\//i.test(t)) return true;
+  if (/^(log\s?in|login|sign\s?up|signup|facebook|instagram|apple news|twitter|just a moment|attention required|access denied|forbidden|error|403|404|page not found|redirecting|cookie policy)$/.test(t)) return true;
+  if (t.length < 48 && /\b(log\s?in|sign\s?in|sign\s?up)\b/.test(t)) return true;
+  return false;
+}
+
+function decodeEntities(s) {
+  return String(s || "")
+    .replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">")
+    .replace(/&quot;/g, "\"").replace(/&#39;|&apos;/g, "'")
+    .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(+n))
+    .replace(/&nbsp;/g, " ");
+}
+
+function unfurlFromHtml(html, targetUrl) {
+  const src = String(html || "");
+  const pick = (prop) => {
+    const a = new RegExp("<meta[^>]+(?:property|name)=[\"']" + prop + "[\"'][^>]+content=[\"']([^\"']+)[\"'][^>]*>", "i");
+    const b = new RegExp("<meta[^>]+content=[\"']([^\"']+)[\"'][^>]+(?:property|name)=[\"']" + prop + "[\"'][^>]*>", "i");
+    const m = src.match(a) || src.match(b);
+    return m ? decodeEntities(m[1]) : "";
+  };
+  let title = pick("og:title") || pick("twitter:title");
+  if (!title) {
+    const m = src.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+    if (m) title = decodeEntities(m[1]);
+  }
+  let description = pick("og:description") || pick("twitter:description") || pick("description");
+  title = title.replace(/\s+/g, " ").trim().slice(0, 180);
+  description = description.replace(/\s+/g, " ").trim().slice(0, 280);
+  let domain = "";
+  try { domain = new URL(targetUrl).hostname.replace(/^www\./, ""); } catch { /* ignore */ }
+  if (isJunkTitle(title)) return { title: "", description: "", domain };
+  return { title, description, domain };
+}
+
+async function unfurlRoute(request, env, url) {
+  const auth = request.headers.get("Authorization") || "";
+  if (!env.DASH_TOKEN || auth !== `Bearer ${env.DASH_TOKEN}`) return json({ error: "unauthorized" }, 401);
+  const target = url.searchParams.get("url") || "";
+  if (!isPublicHttpUrl(target)) return json({ error: "bad url" }, 400);
+  let domain = "";
+  try { domain = new URL(target).hostname.replace(/^www\./, ""); } catch { /* ignore */ }
+  try {
+    const res = await fetch(target, {
+      redirect: "follow",
+      headers: { "User-Agent": "BraindropUnfurl/1.0", "Accept": "text/html,application/xhtml+xml" },
+      signal: AbortSignal.timeout(6000),
+    });
+    if (res.url && !isPublicHttpUrl(res.url)) return json({ title: "", description: "", domain });
+    const ctype = res.headers.get("content-type") || "";
+    if (!res.ok || !/text\/html|application\/xhtml/i.test(ctype)) return json({ title: "", description: "", domain });
+    const html = (await res.text()).slice(0, 250000);
+    return json(unfurlFromHtml(html, target));
+  } catch {
+    return json({ title: "", description: "", domain });
+  }
+}
+
+export {
+  needsAttention,
+  subjectDeadline,
+  cleanEmailNoise,
+  shortTitle,
+  unfurlFromHtml,
+  isPublicHttpUrl,
+  briefLabel,
+  parseWhen,
+};

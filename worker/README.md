@@ -41,7 +41,7 @@ curl "https://api.telegram.org/bot<TELEGRAM_TOKEN>/setWebhook" \
   -d "secret_token=<TELEGRAM_SECRET>"
 ```
 
-3. Message your bot anything — it replies with how it filed the drop. `/due` lists what needs attention.
+3. Message your bot anything — it replies with how it filed the drop. `/due` lists tasks due today or newly overdue (not months-old forwarded mail).
 
 ### Email-in
 
@@ -55,13 +55,19 @@ Two options:
 https://braindrop-worker.<you>.workers.dev/email?token=<EMAIL_TOKEN>
 ```
 
-The handler accepts Postmark JSON and Mailgun/SendGrid form payloads, strips `Fwd:` noise and quoted reply text, and classifies subject + body as one drop.
+The handler accepts Postmark JSON and Mailgun/SendGrid form payloads, strips `Fwd:` noise, "Sent from my iPhone", and quoted reply text, and classifies subject + body as one drop. A due date is taken from the subject line only, so a date inside an old forwarded thread does not stay overdue forever.
+
+With sync connected, the dashboard can ask the worker for a link preview: `GET /api/unfurl?url=…` (same `DASH_TOKEN`). If the page is an auth wall, the dashboard keeps a short label and the domain instead.
 
 **Tip for Gmail users:** set up a Gmail filter that auto-forwards starred or labeled emails to your drop address — starring an email then becomes the capture gesture.
 
 ### Connect the dashboard
 
-Open the Braindrop dashboard → **⇅ Sync** → paste your Worker URL and `DASH_TOKEN`. The dashboard then reads and writes the shared store, and drops captured on Telegram or email appear alongside ones typed in the browser.
+Hosting the HTML (GitHub Pages, your own domain, or a local file) does not share data. The worker is the only shared store.
+
+On **each** device, open the dashboard → **⇅ Sync** → paste the **same** Worker URL and the **same** `DASH_TOKEN`. The first connection uploads that browser's existing drops — tasks, notes, archived items, and link titles — and then pulls whatever is already in the worker, including Telegram and email captures. Nothing already on the device is deleted by connecting.
+
+Leave a tab open, or come back to it: the board refreshes from the worker about every 20 seconds and again when the tab is focused. Checking off a task archives it on every device. Deleting a drop removes it from the shared list.
 
 ## Notes
 
