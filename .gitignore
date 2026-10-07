@@ -1,0 +1,8 @@
+# Local Cloudflare Worker dev state and secrets (never commit)
+worker/.dev.vars
+worker/.wrangler/
+.wrangler/
+
+# Node
+node_modules/
+npm-debug.log*
